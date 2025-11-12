@@ -32,6 +32,7 @@ export M3U_PROXY_START_EMBEDDED="true" # Will be set to false if external proxy 
 export M3U_PROXY_HOST="${M3U_PROXY_HOST:-127.0.0.1}" # Bind to localhost for embedded
 export M3U_PROXY_PORT="${M3U_PROXY_PORT:-8085}"
 export M3U_PROXY_LOG_LEVEL="${M3U_PROXY_LOG_LEVEL:-ERROR}" # Default ERROR
+export M3U_PROXY_LOG_PATH="${M3U_PROXY_LOG_PATH:-/var/www/config/logs/m3u-proxy.log}" # Default log path
 export M3U_PROXY_NGINX_TARGET="" # Will be set based on mode for nginx proxy_pass
 
 # Run PHP as root (or m3ue)
@@ -447,6 +448,10 @@ fi
 # Run migrations
 echo "💾 Running migrations..."
 php artisan migrate --force
+
+# Export proxy settings from the database and set them as environment variables
+echo "📦 Exporting proxy settings from database..."
+eval "$(php artisan settings:export-proxy-env)"
 
 echo "🔄 Resetting any stuck sync processes..."
 php artisan app:reset-sync-process
