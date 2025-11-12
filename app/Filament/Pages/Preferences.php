@@ -876,6 +876,34 @@ class Preferences extends SettingsPage
                                             ->label('Allow queue manager access')
                                             ->helperText('When enabled you can access the queue manager using the "Queue Manager" button. When disabled, the queue manager endpoint will return a 403 (Unauthorized).'),
                                     ]),
+                                Section::make('Logging')
+                                    ->schema([
+                                        Toggle::make('log_enabled')
+                                            ->label('Enable Debug Logging')
+                                            ->live(),
+                                        Select::make('log_level')
+                                            ->label('Debug Log Level')
+                                            ->options([
+                                                'debug' => 'Debug',
+                                                'info' => 'Info',
+                                                'warning' => 'Warning',
+                                                'error' => 'Error',
+                                            ])
+                                            ->hidden(fn (Get $get) => ! $get('log_enabled')),
+                                        Select::make('log_type')
+                                            ->label('Debug Log Type')
+                                            ->options([
+                                                'file' => 'File',
+                                                'console' => 'Console',
+                                                'both' => 'Both',
+                                            ])
+                                            ->live()
+                                            ->hidden(fn (Get $get) => ! $get('log_enabled')),
+                                        TextInput::make('log_path')
+                                            ->label('Log File Path')
+                                            ->helperText('The absolute path to the log file.')
+                                            ->hidden(fn (Get $get) => ! $get('log_enabled') || ! in_array($get('log_type'), ['file', 'both'])),
+                                    ]),
                             ]),
                     ])->contained(false),
             ]);
