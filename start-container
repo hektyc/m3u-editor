@@ -448,6 +448,10 @@ fi
 echo "💾 Running migrations..."
 php artisan migrate --force
 
+# Export proxy settings from the database and set them as environment variables
+echo "📦 Exporting proxy settings from database..."
+eval "$(php artisan settings:export-proxy-env)"
+
 echo "🔄 Resetting any stuck sync processes..."
 php artisan app:reset-sync-process
 

@@ -103,6 +103,12 @@ class GeneralSettings extends Settings
     public ?string $auto_backup_database_schedule = null;
     public ?int $auto_backup_database_max_backups = 5;
 
+    // Logging settings
+    public bool $log_enabled = false;
+    public string $log_level = 'debug';
+    public string $log_type = 'file';
+    public ?string $log_path = null;
+
     public static function group(): string
     {
         return 'general';
