@@ -26,7 +26,7 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
-          tags: sparkison/m3u-editor:experimental-amd64
+          tags: hektic/m3u-editor:experimental-amd64
           build-args: |
             GIT_BRANCH=${{ github.ref_name }}
             GIT_COMMIT=${{ github.sha }}
@@ -56,7 +56,7 @@ jobs:
           context: .
           platforms: linux/arm64
           push: true
-          tags: sparkison/m3u-editor:experimental-arm64
+          tags: hektic/m3u-editor:experimental-arm64
           build-args: |
             GIT_BRANCH=${{ github.ref_name }}
             GIT_COMMIT=${{ github.sha }}
@@ -86,9 +86,9 @@ jobs:
 
       - name: Create manifest list
         run: |
-          docker manifest create sparkison/m3u-editor:experimental \
-            sparkison/m3u-editor:experimental-amd64 \
-            sparkison/m3u-editor:experimental-arm64
+          docker manifest create hektic/m3u-editor:experimental \
+            hektic/m3u-editor:experimental-amd64 \
+            hektic/m3u-editor:experimental-arm64
       
       - name: Push manifest list
-        run: docker manifest push sparkison/m3u-editor:experimental
+        run: docker manifest push hektic/m3u-editor:experimental
