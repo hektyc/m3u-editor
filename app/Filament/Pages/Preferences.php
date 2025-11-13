@@ -899,9 +899,61 @@ class Preferences extends SettingsPage
                                             ])
                                             ->live()
                                             ->hidden(fn (Get $get) => ! $get('log_enabled')),
-                                        TextInput::make('log_path')
-                                            ->label('Log File Path')
-                                            ->helperText('The absolute path to the log file.')
+                                        Grid::make(2)
+                                            ->schema([
+                                                Toggle::make('laravel_log_enabled')->label('Laravel Log'),
+                                                Toggle::make('m3u_proxy_log_enabled')->label('M3U Proxy Log'),
+                                                Toggle::make('nginx_log_enabled')->label('Nginx Log'),
+                                                Toggle::make('postgres_log_enabled')->label('Postgres Log'),
+                                                Toggle::make('queue_log_enabled')->label('Queue Log'),
+                                                Toggle::make('redis_log_enabled')->label('Redis Log'),
+                                                Toggle::make('websockets_log_enabled')->label('WebSockets Log'),
+                                            ])->hidden(fn (Get $get) => ! $get('log_enabled')),
+                                        Grid::make(2)
+                                            ->schema([
+                                                TextInput::make('laravel_log_path')
+                                                    ->label('Laravel Log File Path')
+                                                    ->helperText('The absolute path to the log file.')
+                                                    ->disabled(fn () => $this->isVolumeMapped('laravel.log'))
+                                                    ->suffixIcon(fn () => $this->isVolumeMapped('laravel.log') ? 'heroicon-m-lock-closed' : null)
+                                                    ->hint(fn () => $this->isVolumeMapped('laravel.log') ? 'Locked - Path is defined in Environment. Remove Volume Mapping for this Log File Path to Unlock.' : null),
+                                                TextInput::make('m3u_proxy_log_path')
+                                                    ->label('M3U Proxy Log File Path')
+                                                    ->helperText('The absolute path to the log file.')
+                                                    ->disabled(fn () => $this->isVolumeMapped('m3u-proxy.log'))
+                                                    ->suffixIcon(fn () => $this->isVolumeMapped('m3u-proxy.log') ? 'heroicon-m-lock-closed' : null)
+                                                    ->hint(fn () => $this->isVolumeMapped('m3u-proxy.log') ? 'Locked - Path is defined in Environment. Remove Volume Mapping for this Log File Path to Unlock.' : null),
+                                                TextInput::make('nginx_log_path')
+                                                    ->label('Nginx Log File Path')
+                                                    ->helperText('The absolute path to the log file.')
+                                                    ->disabled(fn () => $this->isVolumeMapped('nginx.log'))
+                                                    ->suffixIcon(fn () => $this->isVolumeMapped('nginx.log') ? 'heroicon-m-lock-closed' : null)
+                                                    ->hint(fn () => $this->isVolumeMapped('nginx.log') ? 'Locked - Path is defined in Environment. Remove Volume Mapping for this Log File Path to Unlock.' : null),
+                                                TextInput::make('postgres_log_path')
+                                                    ->label('Postgres Log File Path')
+                                                    ->helperText('The absolute path to the log file.')
+                                                    ->disabled(fn () => $this->isVolumeMapped('postgres.log'))
+                                                    ->suffixIcon(fn () => $this->isVolumeMapped('postgres.log') ? 'heroicon-m-lock-closed' : null)
+                                                    ->hint(fn () => $this->isVolumeMapped('postgres.log') ? 'Locked - Path is defined in Environment. Remove Volume Mapping for this Log File Path to Unlock.' : null),
+                                                TextInput::make('queue_log_path')
+                                                    ->label('Queue Log File Path')
+                                                    ->helperText('The absolute path to the log file.')
+                                                    ->disabled(fn () => $this->isVolumeMapped('queue.log'))
+                                                    ->suffixIcon(fn () => $this->isVolumeMapped('queue.log') ? 'heroicon-m-lock-closed' : null)
+                                                    ->hint(fn () => $this->isVolumeMapped('queue.log') ? 'Locked - Path is defined in Environment. Remove Volume Mapping for this Log File Path to Unlock.' : null),
+                                                TextInput::make('redis_log_path')
+                                                    ->label('Redis Log File Path')
+                                                    ->helperText('The absolute path to the log file.')
+                                                    ->disabled(fn () => $this->isVolumeMapped('redis.log'))
+                                                    ->suffixIcon(fn () => $this->isVolumeMapped('redis.log') ? 'heroicon-m-lock-closed' : null)
+                                                    ->hint(fn () => $this->isVolumeMapped('redis.log') ? 'Locked - Path is defined in Environment. Remove Volume Mapping for this Log File Path to Unlock.' : null),
+                                                TextInput::make('websockets_log_path')
+                                                    ->label('WebSocket Log File Path')
+                                                    ->helperText('The absolute path to the log file.')
+                                                    ->disabled(fn () => $this->isVolumeMapped('websockets.log'))
+                                                    ->suffixIcon(fn () => $this->isVolumeMapped('websockets.log') ? 'heroicon-m-lock-closed' : null)
+                                                    ->hint(fn () => $this->isVolumeMapped('websockets.log') ? 'Locked - Path is defined in Environment. Remove Volume Mapping for this Log File Path to Unlock.' : null),
+                                            ])
                                             ->hidden(fn (Get $get) => ! $get('log_enabled') || ! in_array($get('log_type'), ['file', 'both'])),
                                     ]),
                             ]),
@@ -957,5 +1009,18 @@ class Preferences extends SettingsPage
             ->success()
             ->title('Settings saved')
             ->body('Your preferences have been saved successfully.');
+    }
+
+    private function isVolumeMapped(string $logFile): bool
+    {
+        $settings = app(GeneralSettings::class);
+        $logPath = $settings->{str_replace('.', '_', $logFile) . '_path'};
+
+        return !is_writable($logPath);
+    }
+
+    protected function afterSave(): void
+    {
+        Artisan::call('settings:export-logging-env');
     }
 }

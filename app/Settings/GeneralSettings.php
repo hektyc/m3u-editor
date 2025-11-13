@@ -107,7 +107,22 @@ class GeneralSettings extends Settings
     public bool $log_enabled = false;
     public string $log_level = 'debug';
     public string $log_type = 'file';
-    public ?string $log_path = null;
+
+    public ?string $laravel_log_path = null;
+    public ?string $m3u_proxy_log_path = null;
+    public ?string $nginx_log_path = null;
+    public ?string $postgres_log_path = null;
+    public ?string $queue_log_path = null;
+    public ?string $redis_log_path = null;
+    public ?string $websockets_log_path = null;
+
+    public bool $laravel_log_enabled = false;
+    public bool $m3u_proxy_log_enabled = false;
+    public bool $nginx_log_enabled = false;
+    public bool $postgres_log_enabled = false;
+    public bool $queue_log_enabled = false;
+    public bool $redis_log_enabled = false;
+    public bool $websockets_log_enabled = false;
 
     public static function group(): string
     {

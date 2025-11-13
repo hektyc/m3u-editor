@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+# Source logging environment variables if the file exists
+if [ -f "/var/www/config/logging_env.sh" ]; then
+    source "/var/www/config/logging_env.sh"
+fi
+
 # Get/set runtime environment variables
 export PUID="${PUID:-1000}" # NOT CURRENTLY USED...
 export PGID="${PGID:-1000}" # NOT CURRENTLY USED...
@@ -167,6 +172,8 @@ laravel_log_file="${log_dir}/laravel.log"
 ffmpeg_log_file="${log_dir}/ffmpeg.log"
 nginx_log_file="${log_dir}/nginx.log"
 postgres_log_file="${log_dir}/postgress.log"
+redis_log_file="${log_dir}/redis.log"
+m3u_proxy_log_file="${log_dir}/m3u-proxy.log"
 startup_log_file="${log_dir}/startup.log"
 
 # Set log directory variable
@@ -213,7 +220,10 @@ fi
 # Create log files
 [ ! -f "${queue_log_file}" ] && touch "${queue_log_file}"
 [ ! -f "${websockets_log_file}" ] && touch "${websockets_log_file}"
+[ ! -f "${laravel_log_file}" ] && touch "${laravel_log_file}"
 [ ! -f "${nginx_log_file}" ] && touch "${nginx_log_file}"
+[ ! -f "${redis_log_file}" ] && touch "${redis_log_file}"
+[ ! -f "${m3u_proxy_log_file}" ] && touch "${m3u_proxy_log_file}"
 
 # Clear out the log content (could build up over time, clean on container reboot)
 echo "" > "/var/log/cron.out.log"
@@ -226,12 +236,12 @@ echo "" > "${nginx_log_file}"
 [ -f "${swoole_log_file}" ] && rm -f "${swoole_log_file}"
 [ -f "${reverb_log_file}" ] && rm -f "${reverb_log_file}"
 [ -f "${horizon_log_file}" ] && rm -f "${horizon_log_file}"
-[ -f "${laravel_log_file}" ] && rm -f "${laravel_log_file}"
 [ -f "${ffmpeg_log_file}" ] && rm -f "${ffmpeg_log_file}"
 [ -f "${startup_log_file}" ] && rm -f "${startup_log_file}"
 
 # Link environment file
 ln -sf "${env_file}" .env
+
 
 # Remove any stale Laravel bootstrap cache files that might reference dev-only
 # service providers (e.g. beyondcode/laravel-dump-server). These files can be
