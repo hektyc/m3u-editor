@@ -2,12 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Settings\GeneralSettings;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class LogoProxyController extends Controller
@@ -22,7 +23,7 @@ class LogoProxyController extends Controller
             $originalUrl = base64_decode(strtr($encodedUrl, '-_', '+/') . str_repeat('=', (4 - strlen($encodedUrl) % 4) % 4));
 
             // Validate the decoded URL
-            if (!filter_var($originalUrl, FILTER_VALIDATE_URL)) {
+            if (! filter_var($originalUrl, FILTER_VALIDATE_URL)) {
                 return $this->returnPlaceholder();
             }
 
@@ -41,7 +42,7 @@ class LogoProxyController extends Controller
             // Fetch the logo from the remote URL
             $logoData = $this->fetchRemoteLogo($originalUrl);
 
-            if (!$logoData) {
+            if (! $logoData) {
                 return $this->returnPlaceholder();
             }
 
@@ -64,15 +65,34 @@ class LogoProxyController extends Controller
      */
     public static function generateProxyUrl(string $originalUrl, $internal = false): string
     {
+        // Get the config values (takes priority over settings values)
         $proxyUrlOverride = config('proxy.url_override');
-        if (empty($originalUrl) || !filter_var($originalUrl, FILTER_VALIDATE_URL)) {
+        $includeLogosInOverride = config('proxy.url_override_include_logos', true);
+
+        // See if override settings apply
+        try {
+            $settings = app(GeneralSettings::class);
+            if (!$proxyUrlOverride || empty($proxyUrlOverride)) {
+                // Get from settings if not set in config
+                $proxyUrlOverride = $settings->url_override ?? null;
+            }
+            if (config('proxy.url_override_include_logos') === null) {
+                // Get from settings if not set in config
+                $includeLogosInOverride = $settings->url_override_include_logos;
+            }
+        } catch (\Exception $e) {
+        }
+
+        if (empty($originalUrl) || ! filter_var($originalUrl, FILTER_VALIDATE_URL)) {
             $url = '/placeholder.png';
         } else {
             $encodedUrl = rtrim(strtr(base64_encode($originalUrl), '+/', '-_'), '=');
-            $url = $proxyUrlOverride && !$internal
+            // Use override URL only if enabled, not internal request, AND logos are included in override
+            $url = $proxyUrlOverride && ! $internal && $includeLogosInOverride
                 ? rtrim($proxyUrlOverride, '/') . "/logo-proxy/{$encodedUrl}"
                 : url("/logo-proxy/{$encodedUrl}");
         }
+
         return $url;
     }
 
@@ -87,14 +107,14 @@ class LogoProxyController extends Controller
                     'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
                 ])->get($url);
 
-            if (!$response->successful()) {
+            if (! $response->successful()) {
                 return null;
             }
 
             $contentType = $response->header('Content-Type');
 
             // Validate that it's an image
-            if (!str_starts_with($contentType, 'image/')) {
+            if (! str_starts_with($contentType, 'image/')) {
                 return null;
             }
 
@@ -114,6 +134,7 @@ class LogoProxyController extends Controller
                 'url' => $url,
                 'error' => $e->getMessage(),
             ]);
+
             return null;
         }
     }
@@ -125,7 +146,7 @@ class LogoProxyController extends Controller
     {
         $filePath = Storage::disk('local')->path($cacheFile);
 
-        if (!$contentType) {
+        if (! $contentType) {
             // Try to determine content type from file
             $contentType = $this->getContentTypeFromFile($filePath);
         }
@@ -149,7 +170,7 @@ class LogoProxyController extends Controller
     {
         $placeholderPath = public_path('placeholder.png');
 
-        if (!file_exists($placeholderPath)) {
+        if (! file_exists($placeholderPath)) {
             // Return a minimal 1x1 transparent PNG if placeholder doesn't exist
             $transparentPng = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
 
@@ -179,8 +200,9 @@ class LogoProxyController extends Controller
         $mimeType = mime_content_type($filePath);
 
         // Fallback to common image types if detection fails
-        if (!$mimeType || !str_starts_with($mimeType, 'image/')) {
+        if (! $mimeType || ! str_starts_with($mimeType, 'image/')) {
             $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+
             return match ($extension) {
                 'jpg', 'jpeg' => 'image/jpeg',
                 'png' => 'image/png',
@@ -227,6 +249,7 @@ class LogoProxyController extends Controller
             Storage::disk('local')->delete($file);
             $cleared++;
         }
+
         return $cleared;
     }
 
@@ -237,6 +260,7 @@ class LogoProxyController extends Controller
         foreach ($logoFiles as $file) {
             $totalSize += Storage::disk('local')->size($file);
         }
+
         return self::humanFileSize($totalSize);
     }
 
@@ -248,6 +272,7 @@ class LogoProxyController extends Controller
             $bytes /= 1024;
             $i++;
         }
+
         return round($bytes, 2) . ' ' . $units[$i];
     }
 }

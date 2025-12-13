@@ -13,8 +13,11 @@ use App\Models\PlaylistAlias;
 use App\Models\StreamProfile;
 use App\Services\M3uProxyService;
 use App\Settings\GeneralSettings;
+use Exception;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Symfony\Component\HttpFoundation\RedirectResponse;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class M3uProxyApiController extends Controller
@@ -26,7 +29,7 @@ class M3uProxyApiController extends Controller
      * @param  int  $id
      * @param  string|null  $uuid  Optional playlist UUID for context
      * 
-     * @return \Illuminate\Http\RedirectResponse
+     * @return Response|RedirectResponse
      */
     public function channel(Request $request, $id, $uuid = null)
     {
@@ -34,6 +37,9 @@ class M3uProxyApiController extends Controller
             'playlist',
             'customPlaylist'
         ])->findOrFail($id);
+
+        // See if username is passed in request
+        $username = $request->input('username', null);
 
         // If UUID provided, resolve that specific playlist (e.g., merged playlist)
         // Otherwise fall back to the channel's effective playlist
@@ -62,7 +68,13 @@ class M3uProxyApiController extends Controller
             $profile = $playlist->streamProfile;
         }
 
-        $url = app(M3uProxyService::class)->getChannelUrl($playlist, $channel, $request, $profile);
+        $url = app(M3uProxyService::class)
+            ->getChannelUrl(
+                $playlist,
+                $channel,
+                $request,
+                $profile
+            );
 
         return redirect($url);
     }
@@ -74,13 +86,16 @@ class M3uProxyApiController extends Controller
      * @param  int  $id
      * @param  string|null  $uuid  Optional playlist UUID for context
      * 
-     * @return \Illuminate\Http\RedirectResponse
+     * @return Response|RedirectResponse
      */
     public function episode(Request $request, $id, $uuid = null)
     {
         $episode = Episode::query()->with([
             'playlist'
         ])->findOrFail($id);
+
+        // See if username is passed in request
+        $username = $request->input('username', null);
 
         // If UUID provided, resolve that specific playlist (e.g., merged playlist)
         // Otherwise fall back to the episode's playlist
@@ -101,7 +116,12 @@ class M3uProxyApiController extends Controller
         // For Series, use the VOD stream profile if set
         $profile = $playlist->vodStreamProfile;
 
-        $url = app(M3uProxyService::class)->getEpisodeUrl($playlist, $episode, $profile);
+        $url = app(M3uProxyService::class)
+            ->getEpisodeUrl(
+                $playlist,
+                $episode,
+                $profile
+            );
 
         return redirect($url);
     }
@@ -113,7 +133,7 @@ class M3uProxyApiController extends Controller
      * @param  int  $id
      * @param  string|null  $uuid
      * 
-     * @return StreamedResponse
+     * @return RedirectResponse
      */
     public function channelPlayer(Request $request, $id, $uuid = null)
     {
@@ -156,7 +176,13 @@ class M3uProxyApiController extends Controller
             $profile = $profileId ? StreamProfile::find($profileId) : null;
         }
 
-        $url = app(M3uProxyService::class)->getChannelUrl($playlist, $channel, $request, $profile);
+        $url = app(M3uProxyService::class)
+            ->getChannelUrl(
+                $playlist,
+                $channel,
+                $request,
+                $profile
+            );
 
         return redirect($url);
     }
@@ -168,7 +194,7 @@ class M3uProxyApiController extends Controller
      * @param  int  $id
      * @param  string|null  $uuid
      * 
-     * @return StreamedResponse
+     * @return RedirectResponse
      */
     public function episodePlayer(Request $request, $id, $uuid = null)
     {
@@ -196,9 +222,67 @@ class M3uProxyApiController extends Controller
             $profile = $profileId ? StreamProfile::find($profileId) : null;
         }
 
-        $url = app(M3uProxyService::class)->getEpisodeUrl($playlist, $episode, $profile);
+        $url = app(M3uProxyService::class)
+            ->getEpisodeUrl(
+                $playlist,
+                $episode,
+                $profile
+            );
 
         return redirect($url);
+    }
+
+    /**
+     * Validate failover URLs for smart failover handling.
+     * This endpoint is called by m3u-proxy during failover to get a viable failover URL
+     * based on playlist capacity.
+     * 
+     * Request format:
+     * { 
+     *   "current_url": "http://example.com/stream",
+     *   "metadata": {
+     *      "id": 123,
+     *      "playlist_uuid": "abc-def-ghi",
+     *   }
+     * }
+     * 
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function resolveFailoverUrl(Request $request)
+    {
+        try {
+            $currentUrl = $request->input('current_url');
+            $metadata = $request->input('metadata', []);
+            $failoverCount = $request->input('current_failover_index', 0);
+            $channelId = $metadata['id'] ?? null;
+            $playlistUuid = $metadata['playlist_uuid'] ?? null;
+
+            if (! ($channelId && $currentUrl)) {
+                return response()->json([
+                    'next_url' => null,
+                    'error' => 'Missing channel_id or current_url'
+                ], 400);
+            }
+
+            // Use the M3uProxyService to validate the failover URLs
+            $result = app(M3uProxyService::class)
+                ->resolveFailoverUrl(
+                    $channelId,
+                    $playlistUuid,
+                    $currentUrl,
+                    index: $failoverCount
+                );
+
+            return response()->json($result);
+        } catch (Exception $e) {
+            Log::error('Error resolving failover: ' . $e->getMessage(), $request->all());
+
+            return response()->json([
+                'next_url' => null,
+                'error' => 'Validation failed: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
@@ -218,10 +302,10 @@ class M3uProxyApiController extends Controller
 
         // Invalidate caches based on event type
         switch ($eventType) {
-            case 'CLIENT_CONNECTED':
-            case 'CLIENT_DISCONNECTED':
-            case 'STREAM_STARTED':
-            case 'STREAM_ENDED':
+            case 'client_connected':
+            case 'client_disconnected':
+            case 'stream_started':
+            case 'stream_stopped':
                 $this->invalidateStreamCaches($data);
                 break;
         }

@@ -107,13 +107,17 @@ class Preferences extends SettingsPage
 
     public function form(Schema $schema): Schema
     {
-        // $m3uProxyUrl = rtrim(config('proxy.m3u_proxy_host'), '/');
-        // if ($port = config('proxy.m3u_proxy_port')) {
-        //     $m3uProxyUrl .= ':' . $port;
-        // }
         $m3uPublicUrl = rtrim(config('proxy.m3u_proxy_public_url'), '/');
         $m3uToken = config('proxy.m3u_proxy_token', null);
+        if (empty($m3uPublicUrl)) {
+            $m3uPublicUrl = url('/m3u-proxy');
+        }
         $m3uProxyDocs = $m3uPublicUrl . '/docs';
+
+        // Setup the service
+        $service = new M3uProxyService();
+        $mode = $service->mode();
+        $embedded = $mode === 'embedded';
 
         $vodExample = PlaylistService::getVodExample();
         $seriesExample = PlaylistService::getEpisodeExample();
@@ -136,7 +140,7 @@ class Preferences extends SettingsPage
                                                     ->label('Show breadcrumbs')
                                                     ->helperText('Show breadcrumbs under the page titles'),
                                                 Toggle::make('output_wan_address')
-                                                    ->label('Output WAN address for streams')
+                                                    ->label('Output WAN address in menu')
                                                     ->helperText('When enabled, the application will output the WAN address of the server m3u-editor is currently running on.')
                                                     ->default(function () {
                                                         return config('dev.show_wan_details') !== null
@@ -181,55 +185,193 @@ class Preferences extends SettingsPage
                                     ->columnSpanFull()
                                     ->columns(4)
                                     ->schema([
-                                        Select::make('default_stream_profile_id')
-                                            ->label('Default Transcoding Profile')
-                                            ->columnSpan(2)
-                                            ->searchable()
-                                            ->options(function () {
-                                                return StreamProfile::where('user_id', auth()->id())->pluck('name', 'id');
-                                            })
-                                            ->hintAction(
-                                                Action::make('manage_profiles')
-                                                    ->label('Manage Profiles')
-                                                    ->icon('heroicon-o-arrow-top-right-on-square')
-                                                    ->iconPosition('after')
-                                                    ->size('sm')
-                                                    ->url('/stream-profiles')
-                                                    ->openUrlInNewTab(false)
-                                            )
-                                            ->helperText('The default transcoding profile used for the in-app player for Live content. Leave empty to disable transcoding (some streams may not be playable in the player).'),
-                                        Select::make('default_vod_stream_profile_id')
-                                            ->label('VOD and Series Transcoding Profile')
-                                            ->columnSpan(2)
-                                            ->searchable()
-                                            ->options(function () {
-                                                return StreamProfile::where('user_id', auth()->id())->pluck('name', 'id');
-                                            })
-                                            ->hintAction(
-                                                Action::make('manage_profiles')
-                                                    ->label('Manage Profiles')
-                                                    ->icon('heroicon-o-arrow-top-right-on-square')
-                                                    ->iconPosition('after')
-                                                    ->size('sm')
-                                                    ->url('/stream-profiles')
-                                                    ->openUrlInNewTab(false)
-                                            )
-                                            ->helperText('The default transcoding profile used for the in-app player for VOD/Series content. Leave empty to disable transcoding (some streams may not be playable in the player).'),
+                                        Fieldset::make('URL resolution')
+                                            ->schema([
+                                                Toggle::make('m3u_proxy_public_url_auto_resolve')
+                                                    ->label('Resolve proxy public URL dynamically at request time')
+                                                    ->columnSpanFull()
+                                                    ->hintIcon(
+                                                        'heroicon-m-question-mark-circle',
+                                                        tooltip: 'When enabled, the application will resolve the public-facing proxy URL using the incoming request host/scheme instead of the M3U_PROXY_PUBLIC_URL variable.'
+                                                    )
+                                                    ->helperText('Useful for multi-host access (VPN/Tailscale/etc.)')
+                                                    ->default(false),
+                                            ]),
+
+                                        Fieldset::make('Proxy URL override')
+                                            ->schema([
+                                                TextInput::make('url_override')
+                                                    ->label('Override URL')
+                                                    ->columnSpanFull()
+                                                    ->url()
+                                                    ->live()
+                                                    ->hintIcon(
+                                                        'heroicon-m-question-mark-circle',
+                                                        tooltip: 'If you would like the proxied streams to use a different base URL than the configured app url. Useful for local network access or when using a different domain for streaming.'
+                                                    )
+                                                    ->disabled(fn() => ! empty(config('proxy.url_override')))
+                                                    ->hint(fn() => ! empty(config('proxy.url_override')) ? 'Already set by environment variable!' : null)
+                                                    ->prefixIcon('heroicon-m-link')
+                                                    ->disabled(fn() => ! empty(config('proxy.url_override')))
+                                                    ->hint(fn() => ! empty(config('proxy.url_override')) ? 'Already set by environment variable!' : null)
+                                                    ->default(fn() => ! empty(config('proxy.url_override')) ? config('proxy.url_override') : '')
+                                                    ->afterStateHydrated(function (TextInput $component, $state) {
+                                                        if (! empty(config('proxy.url_override'))) {
+                                                            $component->state((string) config('proxy.url_override'));
+                                                        }
+                                                    })
+                                                    ->dehydrated(fn() => empty(config('proxy.url_override')))
+                                                    ->placeholder('http://192.168.0.123:36400')
+                                                    ->helperText(fn() => 'Leave empty to use the configured app url (default).'),
+
+                                                Toggle::make('url_override_include_logos')
+                                                    ->label('Include logos in proxy URL override')
+                                                    ->columnSpanFull()
+                                                    ->hintIcon(
+                                                        'heroicon-m-question-mark-circle',
+                                                        tooltip: 'This is useful for Plex which need HTTPS for logo images. When using a domain with HTTPS for the frontend, but proxy URL override points to a local HTTP address, Plex may not load the logos due to HTTPS requirements. By enabling this option you can keep the stream proxy override for local access while logos still use the HTTPS domain URL that Plex requires.'
+                                                    )
+                                                    ->disabled(fn() => config('proxy.url_override_include_logos') !== null)
+                                                    ->hint(fn() => config('proxy.url_override_include_logos') !== null ? 'Already set by environment variable!' : null)
+                                                    ->default(fn() => config('proxy.url_override_include_logos') !== null)
+                                                    ->afterStateHydrated(function (Toggle $component, $state) {
+                                                        if (config('proxy.url_override_include_logos') !== null) {
+                                                            $component->state((bool)  config('proxy.url_override_include_logos'));
+                                                        }
+                                                    })
+                                                    ->hidden(fn($get) => empty(config('proxy.url_override')) && empty($get('url_override')))
+                                                    ->dehydrated(fn() => empty(config('proxy.url_override_include_logos')))
+                                                    ->helperText('Whether or not to use the URL override for logos and images too (default is enabled).'),
+                                            ]),
+
+                                        Fieldset::make('Failover settings')
+                                            ->schema([
+                                                Toggle::make('enable_failover_resolver')
+                                                    ->label('Enable advanced failover logic')
+                                                    ->columnSpanFull()
+                                                    ->hintIcon(
+                                                        'heroicon-m-question-mark-circle',
+                                                        tooltip: 'When enabled, the proxy will make a call to the editor to determine which failover to use based on available capacity. When disabled, a list of failover URLs will be sent to the proxy and it will loop through them without any capacity checks when a stream failure occurs.'
+                                                    )
+                                                    ->live()
+                                                    ->disabled(fn() => ! empty(config('proxy.resolver_url')))
+                                                    ->hint(fn() => ! empty(config('proxy.resolver_url')) ? 'Already set by environment variable!' : null)
+                                                    ->default(false)
+                                                    ->afterStateHydrated(function (Toggle $component, $state) {
+                                                        if (! empty(config('proxy.resolver_url'))) {
+                                                            $component->state((bool) config('proxy.resolver_url'));
+                                                        }
+                                                    })
+                                                    ->dehydrated(fn() => empty(config('proxy.resolver_url')))
+                                                    ->helperText('Use to enable advanced failover checking and resolution.'),
+
+                                                TextInput::make('failover_resolver_url')
+                                                    ->label('Failover Resolver URL')
+                                                    ->columnSpanFull()
+                                                    ->url()
+                                                    ->live()
+                                                    ->prefixIcon('heroicon-m-link')
+                                                    ->disabled(fn() => ! empty(config('proxy.resolver_url')))
+                                                    ->hint(fn() => ! empty(config('proxy.resolver_url')) ? 'Already set by environment variable!' : null)
+                                                    ->default(fn() => ! empty(config('proxy.resolver_url')) ? config('proxy.resolver_url') : '')
+                                                    ->afterStateHydrated(function (TextInput $component, $state) {
+                                                        if (! empty(config('proxy.resolver_url'))) {
+                                                            $component->state((string) config('proxy.resolver_url'));
+                                                        }
+                                                    })
+                                                    ->required(fn($get) => !! $get('enable_failover_resolver'))
+                                                    ->hidden(fn($get) => ! $get('enable_failover_resolver'))
+                                                    ->dehydrated(fn() => empty(config('proxy.resolver_url')))
+                                                    ->placeholder(fn() => $embedded ? 'http://127.0.0.1:' . config('app.port') : 'http://m3u-editor:36400')
+                                                    ->helperText(fn() => $embedded
+                                                        ? 'For embedded mode, you should use localhost, e.g.: "http://127.0.0.1:36400" or "http://localhost:36400".'
+                                                        : 'Domain the proxy can use to access the editor for faillover resolution, e.g.: "http://m3u-editor:36400", "http://192.168.0.101:36400", "http://your-domain.dev", etc.'),
+
+                                                Action::make('test_failover_connection')
+                                                    ->label('Test failover resolver connection')
+                                                    ->icon('heroicon-m-signal')
+                                                    ->action(function ($get) use ($service) {
+                                                        $configUrl = config('proxy.resolver_url');
+                                                        $url = $configUrl ?? $get('failover_resolver_url');
+                                                        $url = rtrim($url, '/');
+                                                        $result = $service->testResolver($url);
+
+                                                        if ($result['success']) {
+                                                            Notification::make()
+                                                                ->success()
+                                                                ->title('Connection Successful')
+                                                                ->body(Str::markdown(
+                                                                    "**Proxy can reach the editor!**\n\n" .
+                                                                        "URL tested: `{$result['url_tested']}`\n\n"
+                                                                ))
+                                                                ->duration(8000)
+                                                                ->send();
+                                                        } else {
+                                                            Notification::make()
+                                                                ->danger()
+                                                                ->title('Connection Failed')
+                                                                ->body(Str::markdown(
+                                                                    "**The proxy cannot reach the editor**\n\n" .
+                                                                        $result['message'] . "\n\n" .
+                                                                        "Please verify the Failover Resolver URL is correct and accessible from the proxy container/service."
+                                                                ))
+                                                                ->duration(10000)
+                                                                ->send();
+                                                        }
+                                                    })->hidden(fn($get) => ! $get('enable_failover_resolver')),
+                                            ]),
+
+                                        Fieldset::make('In-app player transcoding settings')
+                                            ->schema([
+                                                Select::make('default_stream_profile_id')
+                                                    ->label('Default Live Transcoding Profile')
+                                                    ->columnSpan(2)
+                                                    ->searchable()
+                                                    ->options(function () {
+                                                        return StreamProfile::where('user_id', auth()->id())->pluck('name', 'id');
+                                                    })
+                                                    ->hintAction(
+                                                        Action::make('manage_profiles')
+                                                            ->label('Manage Profiles')
+                                                            ->icon('heroicon-o-arrow-top-right-on-square')
+                                                            ->iconPosition('after')
+                                                            ->size('sm')
+                                                            ->url('/stream-profiles')
+                                                            ->openUrlInNewTab(false)
+                                                    )
+                                                    ->helperText('The default transcoding profile used for the in-app player for Live content. Leave empty to disable transcoding (some streams may not be playable in the player).'),
+                                                Select::make('default_vod_stream_profile_id')
+                                                    ->label('VOD and Series Transcoding Profile')
+                                                    ->columnSpan(2)
+                                                    ->searchable()
+                                                    ->options(function () {
+                                                        return StreamProfile::where('user_id', auth()->id())->pluck('name', 'id');
+                                                    })
+                                                    ->hintAction(
+                                                        Action::make('manage_profiles')
+                                                            ->label('Manage Profiles')
+                                                            ->icon('heroicon-o-arrow-top-right-on-square')
+                                                            ->iconPosition('after')
+                                                            ->size('sm')
+                                                            ->url('/stream-profiles')
+                                                            ->openUrlInNewTab(false)
+                                                    )
+                                                    ->helperText('The default transcoding profile used for the in-app player for VOD/Series content. Leave empty to disable transcoding (some streams may not be playable in the player).'),
+                                            ]),
 
                                         Action::make('test_connection')
                                             ->color('gray')
                                             ->label('Test m3u proxy connection')
                                             ->icon('heroicon-m-signal')
-                                            ->action(function () {
+                                            ->action(function () use ($service, $mode) {
                                                 try {
-                                                    $service = new M3uProxyService();
                                                     $result = $service->getProxyInfo();
 
                                                     if ($result['success']) {
                                                         $info = $result['info'];
 
                                                         // Build a nice detailed message
-                                                        $mode = ucfirst($service->mode());
+                                                        $mode = ucfirst($mode);
                                                         $details = "**Version:** {$info['version']}\n\n";
                                                         if ($service->mode() === 'external') {
                                                             $details .= "**Deployment Mode:** ✅ {$mode}\n\n";
@@ -883,48 +1025,6 @@ class Preferences extends SettingsPage
                             ]),
                     ])->contained(false),
             ]);
-    }
-
-    /**
-     * Create a Select component for codec selection with dynamic options based on hardware acceleration method.
-     *
-     * @param  string  $label  The label for the codec type (e.g., 'video', 'audio', 'subtitle').
-     * @param  string  $field  The field name for the codec in the settings.
-     * @param  \Filament\Schemas\Schema  $schema  The form instance to which this component belongs.
-     */
-    private function makeCodecSelect(
-        string $label,
-        string $field,
-        Schema $schema
-    ): Select {
-        $configKey = "proxy.{$field}";
-        $configValue = config($configKey);
-
-        return Select::make($field)
-            ->label(ucwords($label) . ' codec')
-            ->helperText("Transcode {$label} streams to this codec.\nLeave blank to copy the original.")
-            ->allowHtml()
-            ->searchable()
-            ->live()
-            ->noSearchResultsMessage('No codecs found.')
-            ->options(function (Get $get) use ($label) {
-                $accelerationMethod = $get('hardware_acceleration_method');
-                switch ($label) {
-                    case 'video':
-                        return FfmpegCodecService::getVideoCodecs($accelerationMethod);
-                    case 'audio':
-                        return FfmpegCodecService::getAudioCodecs($accelerationMethod);
-                    case 'subtitle':
-                        return FfmpegCodecService::getSubtitleCodecs($accelerationMethod);
-                    default:
-                        return [];
-                }
-            })
-            ->placeholder(fn() => empty($configValue) ? 'copy' : $configValue)
-            ->suffixIcon(fn() => ! empty($configValue) ? 'heroicon-m-lock-closed' : null)
-            ->disabled(fn() => ! empty($configValue))
-            ->hint(fn() => ! empty($configValue) ? 'Already set by environment variable!' : null)
-            ->dehydrated(fn() => empty($configValue));
     }
 
     public function getSavedNotification(): ?Notification

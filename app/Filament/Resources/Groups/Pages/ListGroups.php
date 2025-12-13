@@ -17,7 +17,7 @@ class ListGroups extends ListRecords
 {
     protected static string $resource = GroupResource::class;
 
-    protected ?string $subheading = 'Manage channel groups.';
+    protected ?string $subheading = 'Manage live groups.';
 
     protected function getHeaderActions(): array
     {
@@ -26,6 +26,8 @@ class ListGroups extends ListRecords
                 ->using(function (array $data, string $model): Model {
                     $data['user_id'] = auth()->id();
                     $data['custom'] = true;
+                    $data['type'] = 'live';
+
                     return $model::create($data);
                 })
                 ->successNotification(
@@ -43,7 +45,8 @@ class ListGroups extends ListRecords
     protected function getTableQuery(): ?Builder
     {
         return static::getResource()::getEloquentQuery()
-            ->where('user_id', auth()->id());
+            ->where('user_id', auth()->id())
+            ->where('type', 'live');
     }
 
     public function getTabs(): array
@@ -65,8 +68,11 @@ class ListGroups extends ListRecords
         // Return tabs
         return $playlists->mapWithKeys(fn($playlist) => [
             $playlist->id => Tab::make($playlist->name)
-                ->modifyQueryUsing(fn($query) => $query->where('playlist_id', $playlist->id))
-                ->badge($playlist->groups()->count())
+                ->modifyQueryUsing(fn($query) => $query->where([
+                    ['playlist_id', $playlist->id],
+                    ['type', 'live'],
+                ]))
+                ->badge($playlist->liveGroups()->count())
         ])->toArray();
     }
 }

@@ -37,7 +37,7 @@ class Playlist extends Model
         'uploads' => 'array',
         'user_id' => 'integer',
         'sync_time' => 'float',
-        'processing' => 'boolean',
+        'processing' => 'array',
         'dummy_epg' => 'boolean',
         'import_prefs' => 'array',
         'groups' => 'array',
@@ -71,6 +71,26 @@ class Playlist extends Model
     public function getFilePathAttribute(): string
     {
         return "playlist/{$this->uuid}/playlist.m3u";
+    }
+
+    public function isProcessing(): bool
+    {
+        return collect($this->processing ?? [])->values()->contains(true);
+    }
+
+    public function isProcessingLive(): bool
+    {
+        return $this->processing['live_processing'] ?? false;
+    }
+
+    public function isProcessingVod(): bool
+    {
+        return $this->processing['vod_processing'] ?? false;
+    }
+
+    public function isProcessingSeries(): bool
+    {
+        return $this->processing['series_processing'] ?? false;
     }
 
     public function user(): BelongsTo
@@ -128,9 +148,24 @@ class Playlist extends Model
         return $this->hasMany(Group::class);
     }
 
+    public function liveGroups(): HasMany
+    {
+        return $this->groups()->where('type', 'live');
+    }
+
+    public function vodGroups(): HasMany
+    {
+        return $this->groups()->where('type', 'vod');
+    }
+
     public function sourceGroups(): HasMany
     {
         return $this->hasMany(SourceGroup::class);
+    }
+
+    public function sourceCategories(): HasMany
+    {
+        return $this->hasMany(SourceCategory::class);
     }
 
     public function mergedPlaylists(): BelongsToMany

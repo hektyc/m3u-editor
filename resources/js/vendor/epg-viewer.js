@@ -27,6 +27,7 @@ function epgViewer(config) {
         hasMore: true,
         allChannels: {},
         allProgrammes: {},
+        channelOrder: [],
 
         // Pre-built channels with programmes for efficient template access
         processedChannels: {},
@@ -129,6 +130,7 @@ function epgViewer(config) {
             this.allChannels = {};
             this.allProgrammes = {};
             this.processedChannels = {};
+            this.channelOrder = [];
 
             try {
                 await this.loadPage(1);
@@ -345,13 +347,56 @@ function epgViewer(config) {
             Object.assign(this.allChannels, newChannels);
             Object.assign(this.allProgrammes, newProgrammes);
 
-            // Process the new channels synchronously to maintain DOM alignment
-            for (const [channelId, channelData] of Object.entries(newChannels)) {
+            const sortedEntries = Object.entries(newChannels).sort(([idA, dataA], [idB, dataB]) => {
+                const sortA = (dataA?.sort_index ?? Number.MAX_SAFE_INTEGER);
+                const sortB = (dataB?.sort_index ?? Number.MAX_SAFE_INTEGER);
+                if (sortA !== sortB) {
+                    return sortA - sortB;
+                }
+
+                const nameA = (dataA?.display_name || '').toLowerCase();
+                const nameB = (dataB?.display_name || '').toLowerCase();
+                if (nameA && nameB) {
+                    const comparison = nameA.localeCompare(nameB);
+                    if (comparison !== 0) {
+                        return comparison;
+                    }
+                }
+
+                return String(idA).localeCompare(String(idB));
+            });
+
+            for (const [channelId, channelData] of sortedEntries) {
+                const existingChannel = this.processedChannels[channelId];
+
                 this.processedChannels[channelId] = {
                     ...channelData,
                     programmes: this.allProgrammes[channelId] || []
                 };
+
+                if (!existingChannel) {
+                    this.channelOrder.push(channelId);
+                }
             }
+
+            this.channelOrder.sort((idA, idB) => {
+                const sortA = (this.processedChannels[idA]?.sort_index ?? Number.MAX_SAFE_INTEGER);
+                const sortB = (this.processedChannels[idB]?.sort_index ?? Number.MAX_SAFE_INTEGER);
+                if (sortA !== sortB) {
+                    return sortA - sortB;
+                }
+
+                const nameA = (this.processedChannels[idA]?.display_name || '').toLowerCase();
+                const nameB = (this.processedChannels[idB]?.display_name || '').toLowerCase();
+                if (nameA && nameB) {
+                    const comparison = nameA.localeCompare(nameB);
+                    if (comparison !== 0) {
+                        return comparison;
+                    }
+                }
+
+                return String(idA).localeCompare(String(idB));
+            });
         },
 
         getTooltipContent(programme) {
@@ -414,11 +459,22 @@ function epgViewer(config) {
             const start = new Date(programme.start);
             const stop = programme.stop ? new Date(programme.stop) : new Date(start.getTime() + 30 * 60 * 1000);
 
-            const dayStart = new Date(start);
-            dayStart.setHours(0, 0, 0, 0);
+            // Get the start of the currently viewed day (not the programme's day)
+            const [year, month, day] = this.currentDate.split('-').map(Number);
+            const dayStart = new Date(year, month - 1, day, 0, 0, 0, 0);
+            const dayEnd = new Date(year, month - 1, day, 23, 59, 59, 999);
 
-            const startHours = (start - dayStart) / (1000 * 60 * 60);
-            const durationHours = (stop - start) / (1000 * 60 * 60);
+            // Clip programme times to the current day boundaries
+            const clippedStart = start < dayStart ? dayStart : start;
+            const clippedStop = stop > dayEnd ? dayEnd : stop;
+
+            // If programme is completely outside the current day, hide it
+            if (stop < dayStart || start > dayEnd) {
+                return 'display: none;';
+            }
+
+            const startHours = (clippedStart - dayStart) / (1000 * 60 * 60);
+            const durationHours = (clippedStop - clippedStart) / (1000 * 60 * 60);
 
             // 100px per hour
             const pixelsPerHour = 100;

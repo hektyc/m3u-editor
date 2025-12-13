@@ -35,6 +35,7 @@ class EpgApiController extends Controller
         // Pagination parameters
         $page = (int) $request->get('page', 1);
         $perPage = (int) $request->get('per_page', 50);
+        $offset = max(0, ($page - 1) * $perPage);
         $search = $request->get('search', null);
 
         // Get parsed date range
@@ -71,7 +72,7 @@ class EpgApiController extends Controller
                     });
                 })
                 ->limit($perPage)
-                ->offset(($page - 1) * $perPage)
+                ->offset($offset)
                 ->get();
 
             // Get the channel IDs from database records to fetch cache data
@@ -82,6 +83,7 @@ class EpgApiController extends Controller
 
             // Build ordered channels array using database order
             $channels = [];
+            $channelIndex = $offset;
             foreach ($epgChannels as $epgChannel) {
                 $channelId = $epgChannel->channel_id;
                 $channels[$channelId] = [
@@ -90,11 +92,17 @@ class EpgApiController extends Controller
                     'display_name' => $epgChannel->display_name ?? $epgChannel->name ?? $channelId,
                     'icon' => $epgChannel->icon ?? url('/placeholder.png'),
                     'lang' => $epgChannel->lang ?? 'en',
+                    'sort_index' => $channelIndex++,
                 ];
             }
 
             // Get cached programmes for the requested date range and channels
-            $programmes = $cacheService->getCachedProgrammesRange($epg, $startDate, $endDate, $channelIds);
+            $programmes = $cacheService->getCachedProgrammesRange(
+                $epg,
+                $startDate,
+                $endDate,
+                $channelIds
+            );
 
             // Get cache metadata
             $metadata = $cacheService->getCacheMetadata($epg);
@@ -165,6 +173,7 @@ class EpgApiController extends Controller
         // Pagination parameters
         $page = (int) $request->get('page', 1);
         $perPage = (int) $request->get('per_page', 50);
+        $skip = max(0, ($page - 1) * $perPage);
         $search = $request->get('search', null);
         $vod = (bool) $request->get('vod', false);
 
@@ -206,7 +215,7 @@ class EpgApiController extends Controller
                     });
                 })
                 ->limit($perPage)
-                ->offset(($page - 1) * $perPage)
+                ->offset($skip)
                 ->select('channels.*')
                 ->get();
 
@@ -240,6 +249,7 @@ class EpgApiController extends Controller
             $epgIds = [];
             $dummyEpgChannels = [];
             $playlistChannelData = [];
+            $channelSortIndex = $skip;
             foreach ($playlistChannels as $channel) {
                 $epgData = $channel->epgChannel ?? null;
                 $channelNo = $channel->channel;
@@ -259,7 +269,16 @@ class EpgApiController extends Controller
                         $epgChannelMap[$epgId][$epgData->channel_id] = [];
                     }
 
-                    $logo = $channel->logo ?? $channel->logo_internal ?? '';
+                    $logo = url('/placeholder.png');
+                    if ($channel->logo) {
+                        // Logo override takes precedence
+                        $logo = $channel->logo;
+                    } elseif ($channel->logo_type === ChannelLogoType::Epg && $channel->epgChannel && $channel->epgChannel->icon) {
+                        $logo = $channel->epgChannel->icon;
+                    } elseif ($channel->logo_type === ChannelLogoType::Channel && ($channel->logo || $channel->logo_internal)) {
+                        $logo = $channel->logo ?? $channel->logo_internal ?? '';
+                        $logo = filter_var($logo, FILTER_VALIDATE_URL) ? $logo : url('/placeholder.png');
+                    }
                     if ($logoProxyEnabled) {
                         $logo = LogoProxyController::generateProxyUrl($logo, internal: true);
                     }
@@ -321,7 +340,7 @@ class EpgApiController extends Controller
                 // Determine the channel format based on URL or container extension
                 $originalUrl = $channel->url_custom ?? $channel->url;
                 if (Str::endsWith($originalUrl, '.m3u8')) {
-                    $channelFormat = 'hls';
+                    $channelFormat = 'm3u8';
                 } elseif (Str::endsWith($originalUrl, '.ts')) {
                     $channelFormat = 'ts';
                 } else {
@@ -359,6 +378,8 @@ class EpgApiController extends Controller
                     'icon' => $icon,
                     'has_epg' => $epgData !== null,
                     'epg_channel_id' => $epgData->channel_id ?? null,
+                    'tvg_shift' => (int) ($channel->tvg_shift ?? 0), // EPG time shift in hours
+                    'sort_index' => $channelSortIndex++,
                 ];
             }
 
@@ -376,7 +397,6 @@ class EpgApiController extends Controller
                 return $query->where('channels.is_vod', false);
             })->where('enabled', true)->count();
 
-            $skip = ($page - 1) * $perPage;
             $channels = $playlistChannelData;
 
             // Get EPG data from cache for the paginated channels
@@ -425,7 +445,12 @@ class EpgApiController extends Controller
                     }
 
                     // Get programmes from cache for requested date range
-                    $epgProgrammes = $cacheService->getCachedProgrammesRange($epg, $startDate, $endDate, $neededEpgChannelIds);
+                    $epgProgrammes = $cacheService->getCachedProgrammesRange(
+                        $epg,
+                        $startDate,
+                        $endDate,
+                        $neededEpgChannelIds
+                    );
 
                     // Map programmes to playlist channels
                     foreach ($epgProgrammes as $epgChannelId => $channelProgrammes) {
@@ -438,7 +463,33 @@ class EpgApiController extends Controller
 
                                 // Only include programmes for channels in current page
                                 if (isset($channels[$playlistChannelId])) {
-                                    $programmes[$playlistChannelId] = $channelProgrammes;
+                                    // Apply tvg_shift offset if set
+                                    $tvgShift = $channels[$playlistChannelId]['tvg_shift'] ?? 0;
+
+                                    if ($tvgShift !== 0) {
+                                        // Offset all programme times by tvg_shift hours
+                                        $shiftedProgrammes = array_map(function ($programme) use ($tvgShift) {
+                                            $shiftedProgramme = $programme;
+
+                                            // Shift start time
+                                            if (isset($programme['start'])) {
+                                                $startTime = Carbon::parse($programme['start']);
+                                                $shiftedProgramme['start'] = $startTime->addHours($tvgShift)->toIso8601String();
+                                            }
+
+                                            // Shift stop time
+                                            if (isset($programme['stop'])) {
+                                                $stopTime = Carbon::parse($programme['stop']);
+                                                $shiftedProgramme['stop'] = $stopTime->addHours($tvgShift)->toIso8601String();
+                                            }
+
+                                            return $shiftedProgramme;
+                                        }, $channelProgrammes);
+
+                                        $programmes[$playlistChannelId] = $shiftedProgrammes;
+                                    } else {
+                                        $programmes[$playlistChannelId] = $channelProgrammes;
+                                    }
                                 }
                             }
                         }
@@ -553,12 +604,18 @@ class EpgApiController extends Controller
         $endDateInput = $request->get('end_date', $startDateInput);
         $startDateCarbon = Carbon::parse($startDateInput);
         $endDateCarbon = Carbon::parse($endDateInput);
-        
+
         // Swap dates if start is after end
         if ($startDateCarbon->gt($endDateCarbon)) {
             [$startDateCarbon, $endDateCarbon] = [$endDateCarbon, $startDateCarbon];
         }
-        
+
+        // If starte and end date are the same, add some buffer before/after for programme overlap
+        if ($startDateCarbon->gte($endDateCarbon)) {
+            $startDateCarbon->subDay();
+            $endDateCarbon->addDay();
+        }
+
         return [
             'start' => $startDateCarbon->format('Y-m-d'),
             'end' => $endDateCarbon->format('Y-m-d'),

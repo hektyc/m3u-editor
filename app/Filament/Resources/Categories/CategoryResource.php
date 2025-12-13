@@ -94,6 +94,11 @@ class CategoryResource extends Resource
                     ->rules(['min:0', 'max:255'])
                     ->placeholder(fn($record) => $record->name_internal)
                     ->searchable()
+                    ->sortable(query: function (Builder $query, string $direction): Builder {
+                        return $query
+                            ->orderBy('name_internal', $direction)
+                            ->orderBy('name', $direction);
+                    })
                     ->toggleable(),
                 ToggleColumn::make('enabled')
                     ->label('Auto Enable')
@@ -107,10 +112,6 @@ class CategoryResource extends Resource
                 TextColumn::make('series_count')
                     ->label('Series')
                     ->description(fn(Category $record): string => "Enabled: {$record->enabled_series_count}")
-                    ->toggleable()
-                    ->sortable(),
-                TextColumn::make('playlist.name')
-                    ->numeric()
                     ->toggleable()
                     ->sortable(),
                 TextColumn::make('created_at')

@@ -24,8 +24,6 @@ use App\Filament\Resources\Groups\Pages\ViewGroup;
 use Filament\Schemas\Components\Section;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Forms\Components\TextInput;
-use App\Filament\Resources\GroupResource\Pages;
-use App\Filament\Resources\GroupResource\RelationManagers;
 use App\Filament\Resources\Playlists\PlaylistResource;
 use App\Models\CustomPlaylist;
 use App\Models\Group;
@@ -50,12 +48,15 @@ class GroupResource extends Resource
 
     protected static ?string $recordTitleAttribute = 'name';
 
+    protected static ?string $label = 'Live Group';
+    protected static ?string $pluralLabel = 'Groups';
+
     public static function getGloballySearchableAttributes(): array
     {
         return ['name', 'name_internal'];
     }
 
-    protected static string | \UnitEnum | null $navigationGroup = 'Channels & VOD';
+    protected static string | \UnitEnum | null $navigationGroup = 'Live Channels';
 
     public static function getNavigationSort(): ?int
     {
@@ -75,8 +76,7 @@ class GroupResource extends Resource
             ->modifyQueryUsing(function (Builder $query) {
                 $query->withCount('live_channels')
                     ->withCount('enabled_live_channels')
-                    ->withCount('vod_channels')
-                    ->withCount('enabled_vod_channels');
+                    ->where('type', 'live');
             })
             ->filtersTriggerAction(function ($action) {
                 return $action->button()->label('Filters');
@@ -94,6 +94,11 @@ class GroupResource extends Resource
                     ->rules(['min:0', 'max:255'])
                     ->placeholder(fn($record) => $record->name_internal)
                     ->searchable()
+                    ->sortable(query: function (Builder $query, string $direction): Builder {
+                        return $query
+                            ->orderBy('name_internal', $direction)
+                            ->orderBy('name', $direction);
+                    })
                     ->toggleable(),
                 TextInputColumn::make('sort_order')
                     ->label('Sort Order')
@@ -118,15 +123,6 @@ class GroupResource extends Resource
                 TextColumn::make('live_channels_count')
                     ->label('Live Channels')
                     ->description(fn(Group $record): string => "Enabled: {$record->enabled_live_channels_count}")
-                    ->toggleable()
-                    ->sortable(),
-                TextColumn::make('vod_channels_count')
-                    ->label('VOD Channels')
-                    ->description(fn(Group $record): string => "Enabled: {$record->enabled_vod_channels_count}")
-                    ->toggleable()
-                    ->sortable(),
-                TextColumn::make('playlist.name')
-                    ->numeric()
                     ->toggleable()
                     ->sortable(),
                 IconColumn::make('custom')
@@ -218,7 +214,11 @@ class GroupResource extends Resource
                                 ->live()
                                 ->label('Group')
                                 ->helperText('Select the group you would like to move the channels to.')
-                                ->options(fn(Get $get, $record) => Group::where(['user_id' => auth()->id(), 'playlist_id' => $record->playlist_id])->get(['name', 'id'])->pluck('name', 'id'))
+                                ->options(fn(Get $get, $record) => Group::where([
+                                    'type' => 'live',
+                                    'user_id' => auth()->id(),
+                                    'playlist_id' => $record->playlist_id
+                                ])->get(['name', 'id'])->pluck('name', 'id'))
                                 ->searchable(),
                         ])
                         ->action(function ($record, array $data): void {
@@ -352,7 +352,7 @@ class GroupResource extends Resource
                                 ->options(
                                     fn() => Group::query()
                                         ->with(['playlist'])
-                                        ->where(['user_id' => auth()->id()])
+                                        ->where(['user_id' => auth()->id(), 'type' => 'live'])
                                         ->get(['name', 'id', 'playlist_id'])
                                         ->transform(fn($group) => [
                                             'id' => $group->id,
@@ -486,7 +486,6 @@ class GroupResource extends Resource
     {
         return [
             ChannelsRelationManager::class,
-            VodRelationManager::class,
         ];
     }
 

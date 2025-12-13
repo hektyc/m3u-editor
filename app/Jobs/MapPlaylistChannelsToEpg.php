@@ -3,7 +3,6 @@
 namespace App\Jobs;
 
 use App\Enums\Status;
-use App\Services\SimilaritySearchService;
 use Throwable;
 use Exception;
 use App\Models\Channel;
@@ -26,11 +25,8 @@ class MapPlaylistChannelsToEpg implements ShouldQueue
 
     public $deleteWhenMissingModels = true;
 
-    // Giving a timeout of 30 minutes to the Job to process the mapping
-    public $timeout = 60 * 30;
-
-    // Similarity search service
-    protected SimilaritySearchService $similaritySearch;
+    // Giving a timeout of 120 minutes to the Job to process the mapping
+    public $timeout = 60 * 120;
 
     /**
      * Create a new job instance.
@@ -43,9 +39,7 @@ class MapPlaylistChannelsToEpg implements ShouldQueue
         public ?bool  $recurring = false,
         public ?int   $epgMapId = null,
         public ?array $settings = null,
-    ) {
-        $this->similaritySearch = new SimilaritySearchService();
-    }
+    ) {}
 
     /**
      * Execute the job.
@@ -113,7 +107,7 @@ class MapPlaylistChannelsToEpg implements ShouldQueue
                     ->where('is_vod', false)
                     ->whereNotNull('epg_channel_id')
                     ->count();
-                $channels = Channel::whereIn('id', $channels->pluck('id'))
+                $channels = Channel::whereIn('id', $this->channels)
                     ->where('is_vod', false)
                     ->when(!$this->force, function ($query) {
                         $query->where('epg_channel_id', null);
@@ -176,6 +170,7 @@ class MapPlaylistChannelsToEpg implements ShouldQueue
                 $jobs[] = new MapPlaylistChannelsToEpgChunk(
                     channelIds: $chunk,
                     epgId: $epg->id,
+                    epgMapId: $map->id,
                     settings: $settings,
                     batchNo: $batchNo,
                     totalChannels: $channelCount

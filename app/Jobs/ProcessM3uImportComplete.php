@@ -49,6 +49,8 @@ class ProcessM3uImportComplete implements ShouldQueue
         public bool $maxHit = false,
         public bool $isNew = false,
         public bool $runningSeriesImport = false,
+        public bool $runningLiveImport = true, // Default to true for live imports
+        public bool $runningVodImport = true, // Default to true for VOD imports
     ) {
         // Set the invalidate import settings from config
         $this->invalidateImport = config('dev.invalidate_import', null);
@@ -145,12 +147,16 @@ class ProcessM3uImportComplete implements ShouldQueue
                                     'status' => 'canceled',
                                 ]
                             ]);
+
+                            /*
+                             * NOTE: Make sure to clone the collections as they will be deleted below
+                             */
                             $this->createSyncLogEntries(
                                 $sync,
-                                $newChannels,
-                                $removedChannels,
-                                $newGroups,
-                                $removedGroups
+                                $newChannels->clone(),
+                                $removedChannels->clone(),
+                                $newGroups->clone(),
+                                $removedGroups->clone()
                             );
                         }
 
@@ -158,7 +164,11 @@ class ProcessM3uImportComplete implements ShouldQueue
                         $playlist->update([
                             'status' => Status::Failed,
                             'errors' => $message,
-                            'processing' => false,
+                            'processing' => [
+                                ...$playlist->processing ?? [],
+                                'live_processing' => false,
+                                'vod_processing' => false,
+                            ]
                         ]);
 
                         // Cleanup the any new groups/channels
@@ -198,10 +208,10 @@ class ProcessM3uImportComplete implements ShouldQueue
                 ]);
                 $this->createSyncLogEntries(
                     $sync,
-                    $newChannels,
-                    $removedChannels,
-                    $newGroups,
-                    $removedGroups
+                    $newChannels->clone(),
+                    $removedChannels->clone(),
+                    $newGroups->clone(),
+                    $removedGroups->clone()
                 );
             }
         }
@@ -214,8 +224,14 @@ class ProcessM3uImportComplete implements ShouldQueue
         $newGroups->update(['new' => false]);
         $newChannels->update(['new' => false]);
 
+        // Finally, clean up orphaned channels (non-custom channels with null or non-existent group_id)
+        Channel::where('playlist_id', $playlist->id)
+            ->where('is_custom', false)
+            ->whereNull('group_id')
+            ->delete();
+
         // Clear out the jobs
-        Job::where('batch_no', $this->batchNo);
+        Job::where('batch_no', $this->batchNo)->delete();
 
         // Check if creating EPG
         $createEpg = $playlist->xtream
@@ -226,7 +242,7 @@ class ProcessM3uImportComplete implements ShouldQueue
             try {
                 $baseUrl = str($playlist->xtream_config['url'])->replace(' ', '%20')->toString();
                 $username = urlencode($playlist->xtream_config['username']);
-                $password = $playlist->xtream_config['password'];
+                $password = urlencode($playlist->xtream_config['password']);
                 $epgUrl = "$baseUrl/xmltv.php?username=$username&password=$password";
 
                 // Make sure EPG doesn't already exist
@@ -274,15 +290,25 @@ class ProcessM3uImportComplete implements ShouldQueue
         }
 
         // Update the playlist
-        $playlist->update([
+        $update = [
             'status' => Status::Completed,
             'channels' => 0, // not using...
             'synced' => now(),
             'errors' => null,
             'sync_time' => $completedIn,
-            'progress' => 100,
-            'processing' => false
-        ]);
+            'processing' => [
+                ...$playlist->processing ?? [],
+                'live_processing' => false,
+                'vod_processing' => false,
+            ]
+        ];
+        if ($this->runningLiveImport) {
+            $update['progress'] = 100; // Only set if Live import was run
+        }
+        if ($this->runningVodImport) {
+            $update['vod_progress'] = 100; // Only set if VOD import was run
+        }
+        $playlist->update($update);
 
         // Send notification
         if ($this->maxHit) {
@@ -322,25 +348,7 @@ class ProcessM3uImportComplete implements ShouldQueue
                 ->delete();
         }
 
-        // Determine if syncing series metadata as well
-        $syncSeriesMetadata = $playlist->auto_fetch_series_metadata
-            && $playlist->series()->where('enabled', true)->exists();
-
-        if ($syncSeriesMetadata) {
-            // Process series import
-            dispatch(new ProcessM3uImportSeries(
-                playlist: $playlist,
-                force: true,
-                isNew: $this->isNew,
-                batchNo: $this->batchNo,
-            ));
-            Notification::make()
-                ->info()
-                ->title('Fetching Series Metadata')
-                ->body('Fetching series metadata now. This may take a while depending on how many series you have enabled. If stream file syncing is enabled, it will also be ran. Please check back later.')
-                ->broadcast($playlist->user)
-                ->sendToDatabase($playlist->user);
-        }
+        $this->seriesCleanup($playlist);
 
         $syncVod = ($playlist->auto_sync_vod_stream_files || $playlist->auto_fetch_vod_metadata)
             && $playlist->channels()->where([
@@ -380,6 +388,38 @@ class ProcessM3uImportComplete implements ShouldQueue
 
         // Fire the playlist synced event
         event(new SyncCompleted($playlist));
+    }
+
+    /**
+     * Handle series cleanup and importing after playlist import completes.
+     */
+    private function seriesCleanup($playlist)
+    {
+        // First, we need to remove any invalid categories/series/episodes
+        foreach ($playlist->categories()->where('import_batch_no', '!=', $this->batchNo)->cursor() as $category) {
+            $category->series()->delete(); // will cascade to episodes
+            $category->delete();
+        }
+
+        // Determine if syncing series metadata
+        $syncSeriesMetadata = $playlist->auto_fetch_series_metadata
+            && $playlist->series()->where('enabled', true)->exists();
+
+        if ($syncSeriesMetadata) {
+            // Process series import
+            dispatch(new ProcessM3uImportSeries(
+                playlist: $playlist,
+                force: true,
+                isNew: $this->isNew,
+                batchNo: $this->batchNo,
+            ));
+            Notification::make()
+                ->info()
+                ->title('Fetching Series Metadata')
+                ->body('Fetching series metadata now. This may take a while depending on how many series you have enabled. If stream file syncing is enabled, it will also be ran. Please check back later.')
+                ->broadcast($playlist->user)
+                ->sendToDatabase($playlist->user);
+        }
     }
 
     /**

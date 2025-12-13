@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Settings\GeneralSettings;
+
 class ProxyService
 {
     /**
@@ -17,13 +19,21 @@ class ProxyService
     public function __construct()
     {
         // See if proxy override is enabled
-        $proxyOverrideUrl = config('proxy.url_override');
-        if (!empty($proxyOverrideUrl)) {
-            $url = $proxyOverrideUrl;
-        } else {
-            // Default base URL
-            $url = url("");
+        $proxyUrlOverride = config('proxy.url_override');
+
+        // See if override settings apply
+        if (!$proxyUrlOverride || empty($proxyUrlOverride)) {
+            try {
+                $settings = app(GeneralSettings::class);
+                $proxyUrlOverride = $settings->url_override ?? null;
+            } catch (\Exception $e) {
+            }
         }
+
+        // Use the override URL or default to application URL
+        $url = $proxyUrlOverride && filter_var($proxyUrlOverride, FILTER_VALIDATE_URL)
+            ? $proxyUrlOverride
+            : url("");
 
         // Normalize the base url
         $this->baseUrl = rtrim($url, '/');
@@ -44,6 +54,7 @@ class ProxyService
      *
      * @param string|int $id
      * @param string|null $playlistUuid Optional playlist UUID for context (e.g., merged playlists)
+     * 
      * @return string
      */
     public function getProxyUrlForChannel($id, $playlistUuid = null)
@@ -52,6 +63,7 @@ class ProxyService
         if ($playlistUuid) {
             $url .= '/' . $playlistUuid;
         }
+        // Note: Username is now passed via X-Username header, not query param
         return $url;
     }
 
@@ -68,6 +80,7 @@ class ProxyService
         if ($playlistUuid) {
             $url .= '/' . $playlistUuid;
         }
+        // Note: Username is now passed via X-Username header, not query param
         return $url;
     }
 }

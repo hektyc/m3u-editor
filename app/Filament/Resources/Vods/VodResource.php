@@ -67,6 +67,7 @@ use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use App\Traits\HasUserFiltering;
+use Filament\Support\Enums\Width;
 
 class VodResource extends Resource
 {
@@ -85,12 +86,12 @@ class VodResource extends Resource
     {
         $query = parent::getGlobalSearchEloquentQuery()
             ->where('is_vod', true);
-        
+
         // Filter by user_id for non-admin users
         if (auth()->check() && !auth()->user()->isAdmin()) {
             $query->where('user_id', auth()->id());
         }
-        
+
         return $query;
     }
 
@@ -98,20 +99,20 @@ class VodResource extends Resource
     {
         $query = parent::getEloquentQuery()
             ->where('is_vod', true);
-        
+
         // Filter by user_id for non-admin users
         if (auth()->check() && !auth()->user()->isAdmin()) {
             $query->where('user_id', auth()->id());
         }
-        
+
         return $query;
     }
 
-    protected static string|\UnitEnum|null $navigationGroup = 'Channels & VOD';
+    protected static string|\UnitEnum|null $navigationGroup = 'VOD Channels';
 
-    protected static ?string $navigationLabel = 'VOD Channels';
+    protected static ?string $navigationLabel = 'Channels';
 
-    protected static ?string $modelLabel = 'VOD Channel';
+    protected static ?string $modelLabel = 'Channel';
 
     protected static ?string $pluralModelLabel = 'VOD Channels';
 
@@ -168,6 +169,11 @@ class VodResource extends Resource
             TextColumn::make('info')
                 ->label('Info')
                 ->wrap()
+                ->sortable(query: function (Builder $query, string $direction): Builder {
+                    return $query
+                        ->orderBy('title_custom', $direction)
+                        ->orderBy('title', $direction);
+                })
                 ->getStateUsing(function ($record) {
                     $info = $record->info;
                     $title = $record->title_custom ?: $record->title;
@@ -215,6 +221,11 @@ class VodResource extends Resource
                 ->tooltip(fn($record) => $record->stream_id)
                 ->placeholder(fn($record) => $record->stream_id)
                 ->searchable()
+                ->sortable(query: function (Builder $query, string $direction): Builder {
+                    return $query
+                        ->orderBy('stream_id_custom', $direction)
+                        ->orderBy('stream_id', $direction);
+                })
                 ->toggleable(),
             TextInputColumn::make('title_custom')
                 ->label('Title')
@@ -222,6 +233,11 @@ class VodResource extends Resource
                 ->tooltip(fn($record) => $record->title)
                 ->placeholder(fn($record) => $record->title)
                 ->searchable()
+                ->sortable(query: function (Builder $query, string $direction): Builder {
+                    return $query
+                        ->orderBy('title_custom', $direction)
+                        ->orderBy('title', $direction);
+                })
                 ->toggleable(),
             TextInputColumn::make('name_custom')
                 ->label('Name')
@@ -230,6 +246,11 @@ class VodResource extends Resource
                 ->placeholder(fn($record) => $record->name)
                 ->searchable(query: function (Builder $query, string $search): Builder {
                     return $query->orWhereRaw('LOWER(channels.name_custom) LIKE ?', ['%' . strtolower($search) . '%']);
+                })
+                ->sortable(query: function (Builder $query, string $direction): Builder {
+                    return $query
+                        ->orderBy('name_custom', $direction)
+                        ->orderBy('name', $direction);
                 })
                 ->toggleable(),
             TextInputColumn::make('channel')
@@ -564,7 +585,11 @@ class VodResource extends Resource
                             ->live()
                             ->label('Group')
                             ->helperText(fn(Get $get) => $get('playlist') === null ? 'Select a playlist first...' : 'Select the group you would like to move the items to.')
-                            ->options(fn(Get $get) => Group::where(['user_id' => auth()->id(), 'playlist_id' => $get('playlist')])->get(['name', 'id'])->pluck('name', 'id'))
+                            ->options(fn(Get $get) => Group::where([
+                                'type' => 'vod',
+                                'user_id' => auth()->id(),
+                                'playlist_id' => $get('playlist')
+                            ])->get(['name', 'id'])->pluck('name', 'id'))
                             ->searchable()
                             ->disabled(fn(Get $get) => $get('playlist') === null),
                     ])
@@ -669,6 +694,7 @@ class VodResource extends Resource
                     ->requiresConfirmation()
                     ->icon('heroicon-o-link')
                     ->modalIcon('heroicon-o-link')
+                    ->modalWidth(Width::FourExtraLarge)
                     ->modalDescription('Map the selected EPG to the selected channel(s).')
                     ->modalSubmitActionLabel('Map now'),
                 BulkAction::make('preferred_logo')
@@ -895,10 +921,8 @@ class VodResource extends Resource
                 BulkAction::make('enable')
                     ->label('Enable selected')
                     ->action(function (Collection $records): void {
-                        foreach ($records as $record) {
-                            $record->update([
-                                'enabled' => true,
-                            ]);
+                        foreach ($records->chunk(100) as $chunk) {
+                            Channel::whereIn('id', $chunk->pluck('id'))->update(['enabled' => true]);
                         }
                     })->after(function () {
                         Notification::make()
@@ -917,10 +941,8 @@ class VodResource extends Resource
                 BulkAction::make('disable')
                     ->label('Disable selected')
                     ->action(function (Collection $records): void {
-                        foreach ($records as $record) {
-                            $record->update([
-                                'enabled' => false,
-                            ]);
+                        foreach ($records->chunk(100) as $chunk) {
+                            Channel::whereIn('id', $chunk->pluck('id'))->update(['enabled' => false]);
                         }
                     })->after(function () {
                         Notification::make()

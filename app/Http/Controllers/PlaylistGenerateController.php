@@ -43,21 +43,27 @@ class PlaylistGenerateController extends Controller
         }
 
         // Check auth
-        if ($type !== 'alias') {
-            $auths = $playlist->playlistAuths()->where('enabled', true)->get();
+        if ($playlist instanceof PlaylistAlias) {
+            $auth = $playlist->authObject;
+            if ($auth) {
+                $auths = collect([$auth]);
+            } else {
+                $auths = collect();
+            }
         } else {
-            $auths = $playlist->username && $playlist->password
-                ? collect([$playlist->only(['username', 'password'])])
-                : collect();
+            $auths = $playlist->playlistAuths()->where('enabled', true)->get();
         }
 
         $usedAuth = null;
         if ($auths->isNotEmpty()) {
             $authenticated = false;
             foreach ($auths as $auth) {
+                $authUsername = $auth->username;
+                $authPassword = $auth->password;
+
                 if (
-                    $request->get('username') === $auth->username &&
-                    $request->get('password') === $auth->password
+                    $request->get('username') === $authUsername &&
+                    $request->get('password') === $authPassword
                 ) {
                     $authenticated = true;
                     $usedAuth = $auth;
@@ -101,11 +107,11 @@ class PlaylistGenerateController extends Controller
 
                 // Set the auth details
                 if ($usedAuth) {
-                    $username = $usedAuth->username;
-                    $password = $usedAuth->password;
+                    $username = urlencode($usedAuth->username);
+                    $password = urlencode($usedAuth->password);
                 } else {
-                    $username = $playlist->user->name;
-                    $password = $playlist->uuid;
+                    $username = urlencode($playlist->user->name);
+                    $password = urlencode($playlist->uuid);
                 }
 
                 // Output the enabled channels
@@ -272,7 +278,7 @@ class PlaylistGenerateController extends Controller
                                 // Pass the playlist UUID for merged/custom playlists so the correct context is used
                                 $url = ProxyFacade::getProxyUrlForEpisode(
                                     $episode->id,
-                                    $playlist->uuid
+                                    $playlist->uuid,
                                 );
                             }
                             $url = rtrim($url, '.');
@@ -340,22 +346,28 @@ class PlaylistGenerateController extends Controller
 
         // Check auth
         if ($playlist instanceof PlaylistAlias) {
-            if ($playlist->username && $playlist->password) {
-                $auths = collect([$playlist->only(['username', 'password'])]);
+            $auth = $playlist->authObject;
+            if ($auth) {
+                $auths = collect([$auth]);
             } else {
                 $auths = collect();
             }
         } else {
             $auths = $playlist->playlistAuths()->where('enabled', true)->get();
         }
+
         if ($auths->isNotEmpty()) {
             $authenticated = false;
             foreach ($auths as $auth) {
+                $authUsername = $auth->username;
+                $authPassword = $auth->password;
+
                 if (
-                    $request->get('username') === $auth->username &&
-                    $request->get('password') === $auth->password
+                    $request->get('username') === $authUsername &&
+                    $request->get('password') === $authPassword
                 ) {
                     $authenticated = true;
+                    $usedAuth = $auth;
                     break;
                 }
             }

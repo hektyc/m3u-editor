@@ -30,9 +30,18 @@ class PlaylistService
         }
 
         // Check if override URL is set in config
-        $urlOverride = config('proxy.url_override');
-        if ($urlOverride) {
-            return rtrim($urlOverride, '/') . ($path ? '/' . ltrim($path, '/') : '');
+        $proxyUrlOverride = config('proxy.url_override');
+
+        // See if override settings apply
+        if (!$proxyUrlOverride || empty($proxyUrlOverride)) {
+            try {
+                $settings = app(GeneralSettings::class);
+                $proxyUrlOverride = $settings->url_override ?? null;
+            } catch (\Exception $e) {
+            }
+        }
+        if ($proxyUrlOverride) {
+            return rtrim($proxyUrlOverride, '/') . ($path ? '/' . ltrim($path, '/') : '');
         }
 
         // Manually construct base URL to ensure port is included (if not using HTTPS)
@@ -64,7 +73,7 @@ class PlaylistService
         }
         $auth = null;
         if ($playlistAuth) {
-            $auth = '?username=' . $playlistAuth->username . '&password=' . $playlistAuth->password;
+            $auth = '?username=' . urlencode($playlistAuth->username) . '&password=' . urlencode($playlistAuth->password);
         }
 
         // Get the base URLs
@@ -171,7 +180,7 @@ class PlaylistService
                 ? (object) ['username' => $playlist->username, 'password' => $playlist->password]
                 : null;
         }
-        $auth = null;
+        $auth = '';
         if ($playlistAuth) {
             $auth = '?username=' . $playlistAuth->username . '&password=' . $playlistAuth->password;
         }
@@ -184,6 +193,7 @@ class PlaylistService
 
         // Example structure: http://localhost:8888/proxy/hls/manifest.m3u8?d=YOUR_M3U_EDITOR_PLAYLIST_URL&api_password=YOUR_PROXY_API_PASSWORD
         $playlistRoute = route('playlist.generate', ['uuid' => $playlist->uuid]);
+        $playlistRoute .= $auth;
         $m3uUrl = $proxyUrl . '/proxy/hls/manifest.m3u8?d=' . urlencode($playlistRoute);
 
         // Check if we're adding user-agent headers
@@ -193,11 +203,6 @@ class PlaylistService
             $m3uUrl .= '&h_user-agent=' . urlencode($settings['mediaflow_proxy_user_agent']);
         }
         $m3uUrl .= '&api_password=' . $settings['mediaflow_proxy_password'];
-
-        // If auth set, append auth parameters to the URLs
-        if ($auth) {
-            $m3uUrl .= $auth;
-        }
 
         // Return the results
         return [
@@ -382,6 +387,21 @@ class PlaylistService
             }
         }
 
+        // Method 1b: Direct authentication with PlaylistAlias credentials
+        $alias = PlaylistAlias::where('enabled', true)
+            ->where('username', $username)
+            ->where('password', $password)
+            ->with(['user', 'playlist', 'customPlaylist'])
+            ->first();
+
+        if ($alias) {
+            return [
+                $alias,
+                'alias_auth',
+                $username,
+                $password
+            ];
+        }
         // Method 2: Fall back to original authentication:
         //      (username = playlist owner, password = playlist UUID)
         if (!$playlist) {

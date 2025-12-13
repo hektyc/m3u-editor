@@ -8,6 +8,8 @@ use App\Filament\Resources\Playlists\Pages\CreatePlaylist;
 use App\Filament\Resources\Playlists\Pages\EditPlaylist;
 use App\Filament\Resources\Playlists\Pages\ListPlaylists;
 use App\Filament\Resources\Playlists\Pages\ViewPlaylist;
+use App\Filament\Tables\SourceCategoriesTable;
+use App\Filament\Tables\SourceGroupsTable;
 use App\Jobs\CopyAttributesToPlaylist;
 use App\Jobs\DuplicatePlaylist;
 use App\Jobs\ProcessM3uImport;
@@ -23,6 +25,7 @@ use App\Models\Category;
 use App\Models\Playlist;
 use App\Models\PlaylistAuth;
 use App\Models\SharedStream;
+use App\Models\SourceCategory;
 use App\Models\SourceGroup;
 use App\Models\StreamProfile;
 use App\Rules\CheckIfUrlOrLocalPath;
@@ -50,6 +53,7 @@ use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Forms\Components\ToggleButtons;
+use Filament\Forms\Components\Placeholder;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Fieldset;
@@ -59,6 +63,7 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Components\Wizard\Step;
 use Filament\Schemas\Schema;
 use Filament\Tables;
@@ -74,6 +79,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\Rule;
 use RyanChandler\FilamentProgressColumn\ProgressColumn;
 use App\Traits\HasUserFiltering;
+use Filament\Forms\Components\ModalTableSelect;
 
 class PlaylistResource extends Resource
 {
@@ -192,7 +198,12 @@ class PlaylistResource extends Resource
                     ->toggleable()
                     ->color(fn(Status $state) => $state->getColor()),
                 ProgressColumn::make('progress')
-                    ->label('Channel Sync')
+                    ->label('Live Sync')
+                    ->sortable()
+                    ->poll(fn($record) => $record->status === Status::Processing || $record->status === Status::Pending ? '3s' : null)
+                    ->toggleable(),
+                ProgressColumn::make('vod_progress')
+                    ->label('VOD Sync')
                     ->sortable()
                     ->poll(fn($record) => $record->status === Status::Processing || $record->status === Status::Pending ? '3s' : null)
                     ->toggleable(),
@@ -270,6 +281,7 @@ class PlaylistResource extends Resource
                             $record->update([
                                 'status' => Status::Processing,
                                 'progress' => 0,
+                                'vod_progress' => 0,
                             ]);
                             app('Illuminate\Contracts\Bus\Dispatcher')
                                 ->dispatch(new ProcessM3uImport($record, force: true));
@@ -281,12 +293,37 @@ class PlaylistResource extends Resource
                                 ->duration(10000)
                                 ->send();
                         })
-                        ->disabled(fn($record): bool => $record->processing === true)
+                        ->disabled(fn($record): bool => $record->isProcessing())
                         ->requiresConfirmation()
                         ->icon('heroicon-o-arrow-path')
                         ->modalIcon('heroicon-o-arrow-path')
                         ->modalDescription('Process playlist now?')
                         ->modalSubmitActionLabel('Yes, process now'),
+                    Action::make('reset_processing')
+                        ->label('Reset Processing State')
+                        ->icon('heroicon-o-arrow-path')
+                        ->color('warning')
+                        ->requiresConfirmation()
+                        ->modalHeading('Reset Processing State')
+                        ->modalDescription('This will clear any stuck processing locks and allow new syncs to run. Use this if syncs appear stuck.')
+                        ->modalSubmitActionLabel('Reset')
+                        ->action(function (Playlist $record) {
+                            // Clear processing flag
+                            $record->update([
+                                'processing' => [
+                                    'live_processing' => false,
+                                    'vod_processing' => false,
+                                    'series_processing' => false,
+                                ]
+                            ]);
+
+                            Notification::make()
+                                ->success()
+                                ->title('Processing state reset')
+                                ->body('The playlist is no longer processing. You can now run new syncs.')
+                                ->send();
+                        })
+                        ->visible(fn(Playlist $record) => $record->isProcessing()),
                     Action::make('process_series')
                         ->label('Fetch Series Metadata')
                         ->icon('heroicon-o-arrow-down-tray')
@@ -305,7 +342,7 @@ class PlaylistResource extends Resource
                                 ->duration(10000)
                                 ->send();
                         })
-                        ->disabled(fn($record): bool => $record->processing === true)
+                        ->disabled(fn($record): bool => $record->isProcessing())
                         ->hidden(fn($record): bool => ! $record->xtream)
                         ->requiresConfirmation()
                         ->icon('heroicon-o-arrow-down-tray')
@@ -330,51 +367,13 @@ class PlaylistResource extends Resource
                                 ->duration(10000)
                                 ->send();
                         })
-                        ->disabled(fn($record): bool => $record->processing === true)
+                        ->disabled(fn($record): bool => $record->isProcessing())
                         ->hidden(fn($record): bool => ! $record->xtream)
                         ->requiresConfirmation()
                         ->icon('heroicon-o-arrow-down-tray')
                         ->modalIcon('heroicon-o-arrow-down-tray')
                         ->modalDescription('Fetch VOD metadata for this playlist now? Only enabled VOD channels will be included.')
                         ->modalSubmitActionLabel('Yes, process now'),
-                    Action::make('reset_processing')
-                        ->label('Reset Processing State')
-                        ->icon('heroicon-o-arrow-path')
-                        ->color('warning')
-                        ->requiresConfirmation()
-                        ->modalHeading('Reset Processing State')
-                        ->modalDescription('This will clear any stuck processing locks and allow new syncs to run. Use this if syncs appear stuck.')
-                        ->modalSubmitActionLabel('Reset')
-                        ->action(function (Playlist $record) {
-                            // Clear processing flag
-                            $record->processing = false;
-
-                            // Clear Emby syncing flags if they exist
-                            if ($record->emby_config) {
-                                $embyConfig = $record->emby_config;
-
-                                if (isset($embyConfig['vod'])) {
-                                    $embyConfig['vod']['syncing'] = false;
-                                    unset($embyConfig['vod']['sync_started_at']);
-                                }
-
-                                if (isset($embyConfig['series'])) {
-                                    $embyConfig['series']['syncing'] = false;
-                                    unset($embyConfig['series']['sync_started_at']);
-                                }
-
-                                $record->emby_config = $embyConfig;
-                            }
-
-                            $record->save();
-
-                            Notification::make()
-                                ->success()
-                                ->title('Processing state reset')
-                                ->body('The playlist is no longer processing. You can now run new syncs.')
-                                ->send();
-                        })
-                        ->visible(fn(Playlist $record) => $record->processing === true),
                     Action::make('Download M3U')
                         ->label('Download M3U')
                         ->icon('heroicon-o-arrow-down-tray')
@@ -531,9 +530,14 @@ class PlaylistResource extends Resource
                         ->action(function ($record) {
                             $record->update([
                                 'status' => Status::Pending,
-                                'processing' => false,
+                                'processing' => [
+                                    'live_processing' => false,
+                                    'vod_processing' => false,
+                                    'series_processing' => false,
+                                ],
                                 'progress' => 0,
                                 'series_progress' => 0,
+                                'vod_progress' => 0,
                                 'channels' => 0,
                                 'synced' => null,
                                 'errors' => null,
@@ -605,9 +609,14 @@ class PlaylistResource extends Resource
                             foreach ($records as $record) {
                                 $record->update([
                                     'status' => Status::Pending,
-                                    'processing' => false,
+                                    'processing' => [
+                                        'live_processing' => false,
+                                        'vod_processing' => false,
+                                        'series_processing' => false,
+                                    ],
                                     'progress' => 0,
                                     'series_progress' => 0,
+                                    'vod_progress' => 0,
                                     'channels' => 0,
                                     'synced' => null,
                                     'errors' => null,
@@ -674,7 +683,7 @@ class PlaylistResource extends Resource
                             ->duration(10000)
                             ->send();
                     })
-                    ->disabled(fn($record): bool => $record->processing === true)
+                    ->disabled(fn($record): bool => $record->isProcessing())
                     ->requiresConfirmation()
                     ->icon('heroicon-o-arrow-path')
                     ->modalIcon('heroicon-o-arrow-path')
@@ -698,7 +707,7 @@ class PlaylistResource extends Resource
                             ->duration(10000)
                             ->send();
                     })
-                    ->disabled(fn($record): bool => $record->processing === true)
+                    ->disabled(fn($record): bool => $record->isProcessingSeries())
                     ->hidden(fn($record): bool => ! $record->xtream)
                     ->requiresConfirmation()
                     ->icon('heroicon-o-arrow-down-tray')
@@ -723,7 +732,7 @@ class PlaylistResource extends Resource
                             ->duration(10000)
                             ->send();
                     })
-                    ->disabled(fn($record): bool => $record->processing === true)
+                    ->disabled(fn($record): bool => $record->isProcessingVod())
                     ->hidden(fn($record): bool => ! $record->xtream)
                     ->requiresConfirmation()
                     ->icon('heroicon-o-arrow-down-tray')
@@ -740,26 +749,13 @@ class PlaylistResource extends Resource
                     ->modalSubmitActionLabel('Reset')
                     ->action(function ($record) {
                         // Clear processing flag
-                        $record->processing = false;
-
-                        // Clear Emby syncing flags if they exist
-                        if ($record->emby_config) {
-                            $embyConfig = $record->emby_config;
-
-                            if (isset($embyConfig['vod'])) {
-                                $embyConfig['vod']['syncing'] = false;
-                                unset($embyConfig['vod']['sync_started_at']);
-                            }
-
-                            if (isset($embyConfig['series'])) {
-                                $embyConfig['series']['syncing'] = false;
-                                unset($embyConfig['series']['sync_started_at']);
-                            }
-
-                            $record->emby_config = $embyConfig;
-                        }
-
-                        $record->save();
+                        $record->update([
+                            'processing' => [
+                                'live_processing' => false,
+                                'vod_processing' => false,
+                                'series_processing' => false,
+                            ]
+                        ]);
 
                         Notification::make()
                             ->success()
@@ -767,7 +763,7 @@ class PlaylistResource extends Resource
                             ->body('The playlist is no longer processing. You can now run new syncs.')
                             ->send();
                     })
-                    ->visible(fn($record) => $record->processing === true),
+                    ->visible(fn($record) => $record->isProcessing()),
                 Action::make('Download M3U')
                     ->label('Download M3U')
                     ->icon('heroicon-o-arrow-down-tray')
@@ -810,9 +806,14 @@ class PlaylistResource extends Resource
                     ->action(function ($record) {
                         $record->update([
                             'status' => Status::Pending,
-                            'processing' => false,
+                            'processing' => [
+                                'live_processing' => false,
+                                'vod_processing' => false,
+                                'series_processing' => false,
+                            ],
                             'progress' => 0,
                             'series_progress' => 0,
+                            'vod_progress' => 0,
                             'channels' => 0,
                             'synced' => null,
                             'errors' => null,
@@ -962,7 +963,7 @@ class PlaylistResource extends Resource
                         ->live()
                         ->helperText('Enter the full url, using <url>:<port> format - without trailing slash (/).')
                         ->prefixIcon('heroicon-m-globe-alt')
-                        ->maxLength(255)
+                        ->maxLength(2000)
                         ->url()
                         ->columnSpan(2)
                         ->required()
@@ -1166,20 +1167,78 @@ class PlaylistResource extends Resource
                         ->helperText('When enabled, groups will be included based on regex pattern match instead of prefix.')
                         ->hidden(fn(Get $get): bool => ! $get('import_prefs.preprocess') || ! $get('status')),
 
-                    Fieldset::make('Channel & VOD processing')
+                    Fieldset::make('Live channel processing')
                         ->schema([
-                            Select::make('import_prefs.selected_groups')
-                                ->label('Groups to import')
+                            ModalTableSelect::make('import_prefs.selected_groups')
+                                ->tableConfiguration(SourceGroupsTable::class)
+                                ->label('Live groups to import')
                                 ->columnSpan(1)
-                                ->searchable()
                                 ->multiple()
                                 ->helperText('NOTE: If the list is empty, sync the playlist and check again once complete.')
-                                ->options(
-                                    fn($record): array => SourceGroup::where('playlist_id', $record->id)
-                                        ->get()->pluck('name', 'name')->toArray()
-                                ),
+                                ->tableArguments(fn($record): array => [
+                                    'playlist_id' => $record?->id,
+                                    'type' => 'live',
+                                ])
+                                ->selectAction(
+                                    fn(Action $action) => $action
+                                        ->label('Select live groups')
+                                        ->modalHeading('Search live groups')
+                                        ->modalSubmitActionLabel('Confirm selection')
+                                        ->button(),
+                                )
+                                ->hintAction(
+                                    Action::make('clear_groups')
+                                        ->label('Clear all')
+                                        ->icon('heroicon-o-x-mark')
+                                        ->color('danger')
+                                        ->action(function (Set $set) {
+                                            $set('import_prefs.selected_groups', []);
+                                        })
+                                        ->requiresConfirmation()
+                                        ->modalHeading('Clear selection')
+                                        ->modalDescription('Are you sure you want to clear all selected live groups?')
+                                        ->modalSubmitActionLabel('Clear')
+                                )
+                                ->getOptionLabelFromRecordUsing(fn($record) => $record->name)
+                                ->getOptionLabelsUsing(function (array $values, $record): array {
+                                    // Values are IDs, return id => name pairs
+                                    return SourceGroup::where('playlist_id', $record?->id)
+                                        ->where('type', 'live')
+                                        ->whereIn('id', $values)
+                                        ->pluck('name', 'id')  // id => name
+                                        ->toArray();
+                                })
+                                ->afterStateHydrated(function ($component, $state, $record) {
+                                    // Convert names to IDs for display when loading existing data
+                                    if (is_array($state) && !empty($state)) {
+                                        // Check if first item is a string (name) - need to convert to IDs
+                                        if (is_string($state[0] ?? null)) {
+                                            $ids = SourceGroup::where('playlist_id', $record?->id)
+                                                ->where('type', 'live')
+                                                ->whereIn('name', $state)
+                                                ->pluck('id')
+                                                ->unique()
+                                                ->values()
+                                                ->toArray();
+                                            $component->state($ids);
+                                        }
+                                    }
+                                })
+                                ->dehydrateStateUsing(function ($state, $record) {
+                                    // Convert IDs back to names for storage
+                                    if (is_array($state) && !empty($state)) {
+                                        return SourceGroup::where('playlist_id', $record?->id)
+                                            ->where('type', 'live')
+                                            ->whereIn('id', $state)
+                                            ->pluck('name')
+                                            ->unique()
+                                            ->values()
+                                            ->toArray();
+                                    }
+                                    return $state;
+                                }),
                             TagsInput::make('import_prefs.included_group_prefixes')
-                                ->label(fn(Get $get) => ! $get('import_prefs.use_regex') ? 'Group prefixes to import' : 'Regex patterns to import')
+                                ->label(fn(Get $get) => ! $get('import_prefs.use_regex') ? 'Live group prefixes to import' : 'Regex patterns to import')
                                 ->helperText('Press [tab] or [return] to add item.')
                                 ->columnSpan(1)
                                 ->suggestions([
@@ -1193,18 +1252,158 @@ class PlaylistResource extends Resource
                                 ->splitKeys(['Tab', 'Return']),
                         ])->hidden(fn(Get $get): bool => ! $get('import_prefs.preprocess') || ! $get('status')),
 
-                    Fieldset::make('Series processing')
+                    Fieldset::make('VOD processing')
                         ->schema([
-                            Select::make('import_prefs.selected_categories')
-                                ->label('Categories to import')
+                            ModalTableSelect::make('import_prefs.selected_vod_groups')
+                                ->tableConfiguration(SourceGroupsTable::class)
+                                ->label('VOD groups to import')
                                 ->columnSpan(1)
-                                ->searchable()
                                 ->multiple()
                                 ->helperText('NOTE: If the list is empty, sync the playlist and check again once complete.')
-                                ->options(
-                                    fn($record): array => Category::where('playlist_id', $record->id)
-                                        ->get()->pluck('name', 'name')->toArray()
-                                ),
+                                ->tableArguments(fn($record): array => [
+                                    'playlist_id' => $record?->id,
+                                    'type' => 'vod',
+                                ])
+                                ->selectAction(
+                                    fn(Action $action) => $action
+                                        ->label('Select VOD groups')
+                                        ->modalHeading('Search VOD groups')
+                                        ->modalSubmitActionLabel('Confirm selection')
+                                        ->button(),
+                                )
+                                ->hintAction(
+                                    Action::make('clear_groups')
+                                        ->label('Clear all')
+                                        ->icon('heroicon-o-x-mark')
+                                        ->color('danger')
+                                        ->action(function (Set $set) {
+                                            $set('import_prefs.selected_vod_groups', []);
+                                        })
+                                        ->requiresConfirmation()
+                                        ->modalHeading('Clear selection')
+                                        ->modalDescription('Are you sure you want to clear all selected VOD groups?')
+                                        ->modalSubmitActionLabel('Clear')
+                                )
+                                ->getOptionLabelFromRecordUsing(fn($record) => $record->name)
+                                ->getOptionLabelsUsing(function (array $values, $record): array {
+                                    // Values are IDs, return id => name pairs
+                                    return SourceGroup::where('playlist_id', $record?->id)
+                                        ->where('type', 'vod')
+                                        ->whereIn('id', $values)
+                                        ->pluck('name', 'id')  // id => name
+                                        ->toArray();
+                                })
+                                ->afterStateHydrated(function ($component, $state, $record) {
+                                    // Convert names to IDs for display when loading existing data
+                                    if (is_array($state) && !empty($state)) {
+                                        // Check if first item is a string (name) - need to convert to IDs
+                                        if (is_string($state[0] ?? null)) {
+                                            $ids = SourceGroup::where('playlist_id', $record?->id)
+                                                ->where('type', 'vod')
+                                                ->whereIn('name', $state)
+                                                ->pluck('id')
+                                                ->unique()
+                                                ->values()
+                                                ->toArray();
+                                            $component->state($ids);
+                                        }
+                                    }
+                                })
+                                ->dehydrateStateUsing(function ($state, $record) {
+                                    // Convert IDs back to names for storage
+                                    if (is_array($state) && !empty($state)) {
+                                        return SourceGroup::where('playlist_id', $record?->id)
+                                            ->where('type', 'vod')
+                                            ->whereIn('id', $state)
+                                            ->pluck('name')
+                                            ->unique()
+                                            ->values()
+                                            ->toArray();
+                                    }
+                                    return $state;
+                                }),
+                            TagsInput::make('import_prefs.included_vod_group_prefixes')
+                                ->label(fn(Get $get) => ! $get('import_prefs.use_regex') ? 'VOD group prefixes to import' : 'Regex patterns to import')
+                                ->helperText('Press [tab] or [return] to add item.')
+                                ->columnSpan(1)
+                                ->suggestions([
+                                    'US -',
+                                    'UK -',
+                                    'CA -',
+                                    '^(US|UK|CA)',
+                                    'Sports.*HD$',
+                                    '\[.*\]',
+                                ])
+                                ->splitKeys(['Tab', 'Return']),
+                        ])->hidden(fn(Get $get): bool => ! $get('import_prefs.preprocess') || ! $get('status')),
+
+
+                    Fieldset::make('Series processing')
+                        ->schema([
+                            ModalTableSelect::make('import_prefs.selected_categories')
+                                ->tableConfiguration(SourceCategoriesTable::class)
+                                ->label('Categories to import')
+                                ->columnSpan(1)
+                                ->multiple()
+                                ->helperText('NOTE: If the list is empty, sync the playlist and check again once complete.')
+                                ->tableArguments(fn($record): array => [
+                                    'playlist_id' => $record?->id,
+                                ])
+                                ->selectAction(
+                                    fn(Action $action) => $action
+                                        ->label('Select categories')
+                                        ->modalHeading('Search categories')
+                                        ->modalSubmitActionLabel('Confirm selection')
+                                        ->button(),
+                                )
+                                ->hintAction(
+                                    Action::make('clear_categories')
+                                        ->label('Clear all')
+                                        ->icon('heroicon-o-x-mark')
+                                        ->color('danger')
+                                        ->action(function (Set $set) {
+                                            $set('import_prefs.selected_categories', []);
+                                        })
+                                        ->requiresConfirmation()
+                                        ->modalHeading('Clear selection')
+                                        ->modalDescription('Are you sure you want to clear all selected categories?')
+                                        ->modalSubmitActionLabel('Clear')
+                                )
+                                ->getOptionLabelFromRecordUsing(fn($record) => $record->name)
+                                ->getOptionLabelsUsing(function (array $values, $record): array {
+                                    // Values are IDs, return id => name pairs
+                                    return SourceCategory::where('playlist_id', $record?->id)
+                                        ->whereIn('id', $values)
+                                        ->pluck('name', 'id')  // id => name
+                                        ->toArray();
+                                })
+                                ->afterStateHydrated(function ($component, $state, $record) {
+                                    // Convert names to IDs for display when loading existing data
+                                    if (is_array($state) && !empty($state)) {
+                                        // Check if first item is a string (name) - need to convert to IDs
+                                        if (is_string($state[0] ?? null)) {
+                                            $ids = SourceCategory::where('playlist_id', $record?->id)
+                                                ->whereIn('name', $state)
+                                                ->pluck('id')
+                                                ->unique()
+                                                ->values()
+                                                ->toArray();
+                                            $component->state($ids);
+                                        }
+                                    }
+                                })
+                                ->dehydrateStateUsing(function ($state, $record) {
+                                    // Convert IDs back to names for storage
+                                    if (is_array($state) && !empty($state)) {
+                                        return SourceCategory::where('playlist_id', $record?->id)
+                                            ->whereIn('id', $state)
+                                            ->pluck('name')
+                                            ->unique()
+                                            ->values()
+                                            ->toArray();
+                                    }
+                                    return $state;
+                                }),
                             TagsInput::make('import_prefs.included_category_prefixes')
                                 ->label(fn(Get $get) => ! $get('import_prefs.use_regex') ? 'Category prefixes to import' : 'Regex patterns to import')
                                 ->helperText('Press [tab] or [return] to add item.')

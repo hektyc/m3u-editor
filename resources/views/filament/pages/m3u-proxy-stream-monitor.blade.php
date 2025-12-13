@@ -46,8 +46,8 @@
                         <p class="text-sm font-medium text-gray-600 dark:text-gray-400">Total Bandwidth</p>
                         <p class="text-2xl font-bold text-gray-900 dark:text-white">
                             @php
-                                $totalBandwidth = $globalStats['total_bandwidth_kbps'] ?? 0;
-                                echo $totalBandwidth > 1000 ? round($totalBandwidth / 1000, 1) . ' Mbps' : $totalBandwidth . ' kbps';
+$totalBandwidth = $globalStats['total_bandwidth_kbps'] ?? 0;
+echo $totalBandwidth > 1000 ? round($totalBandwidth / 1000, 1) . ' Mbps' : $totalBandwidth . ' kbps';
                             @endphp
                         </p>
                     </div>
@@ -71,11 +71,17 @@
         <div class="mb-4 flex items-center justify-between">
             <div class="flex items-center space-x-4">
                 <label class="flex items-center">
-                    <input type="checkbox" x-model="autoRefresh" class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-indigo-600 dark:text-indigo-400 shadow-sm focus:border-indigo-300 dark:focus:border-indigo-500 focus:ring focus:ring-indigo-200 dark:focus:ring-indigo-800 focus:ring-opacity-50">
+                    <x-filament::input.checkbox x-model="autoRefresh" />
                     <span class="ml-2 text-sm text-gray-600 dark:text-gray-400">Auto-refresh every {{ $refreshInterval }}s</span>
                 </label>
-                <span class="text-xs text-gray-500 dark:text-gray-400">Last updated: <span x-text="new Date().toLocaleTimeString()"></span></span>
+
+                <x-filament::badge size="sm">
+                    Last updated: <span x-text="new Date().toLocaleTimeString()"></span>
+                </x-filament::badge>
             </div>
+
+            
+
         </div>
 
         <!-- Streams List -->
@@ -98,7 +104,7 @@
                             <p class="font-medium mb-2">Please verify:</p>
                             <ul class="list-disc list-inside space-y-1 ml-2">
                                 <li>The m3u-proxy server is running</li>
-                                <li>The proxy URL is configured correctly: <code class="px-1 py-0.5 bg-red-200 dark:bg-red-800 rounded text-xs">{{ config('proxy.m3u_proxy_url') }}</code></li>
+                                <li>The proxy URL is configured correctly: <code class="px-1 py-0.5 bg-red-200 dark:bg-red-800 rounded text-xs">{{ config('proxy.m3u_proxy_url') ?? url('/m3u-proxy') }}</code></li>
                                 <li>There are no firewall or network issues blocking the connection</li>
                             </ul>
                         </div>
@@ -125,8 +131,8 @@
                                 <div class="md:flex items-center space-x-0 md:space-x-4 space-y-2 md:space-y-0">
                                     <div class="flex-shrink-0">
                                         <div class="h-10 w-10 rounded-full flex items-center justify-center {{ 
-                                            $stream['status'] === 'active' ? 'bg-green-100 dark:bg-green-900 text-green-600 dark:text-green-300' : 
-                                            ($stream['status'] === 'idle' ? 'bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300' : 'bg-red-100 dark:bg-red-900 text-red-600 dark:text-red-300') 
+                                            $stream['status'] === 'active' ? 'bg-green-100 dark:bg-green-900 text-green-600 dark:text-green-300' :
+            ($stream['status'] === 'idle' ? 'bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300' : 'bg-red-100 dark:bg-red-900 text-red-600 dark:text-red-300') 
                                         }}">
                                             @if($stream['status'] === 'idle')
                                                 <x-heroicon-s-pause class="w-5 h-5" />
@@ -163,8 +169,8 @@
                                         </span>
                                     @endif
                                     <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {{ 
-                                        $stream['status'] === 'active' ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' : 
-                                        ($stream['status'] === 'idle' ? 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200' : 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200') 
+                                        $stream['status'] === 'active' ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' :
+            ($stream['status'] === 'idle' ? 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200' : 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200') 
                                     }}">
                                         {{ ucfirst($stream['status']) }}
                                     </span>
@@ -228,6 +234,7 @@
                                             <thead class="bg-gray-50 dark:bg-gray-800">
                                                 <tr>
                                                     <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Client IP</th>
+                                                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Username</th>
                                                     <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Connected</th>
                                                     <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Duration</th>
                                                     <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
@@ -237,6 +244,7 @@
                                                 @foreach($stream['clients'] as $client)
                                                     <tr>
                                                         <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white">{{ $client['ip'] }}</td>
+                                                        <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white">{{ $client['username'] ?? '-' }}</td>
                                                         <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{{ $client['connected_at'] }}</td>
                                                         <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{{ $client['duration'] }}</td>
                                                         <td class="px-3 py-2 whitespace-nowrap">
