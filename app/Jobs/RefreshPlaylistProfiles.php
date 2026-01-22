@@ -53,6 +53,14 @@ class RefreshPlaylistProfiles implements ShouldQueue
         if ($this->playlistId) {
             $playlist = Playlist::find($this->playlistId);
             if ($playlist && $playlist->profiles_enabled) {
+                // Skip if playlist is currently processing/syncing to avoid concurrent API calls
+                // that could trigger provider rate limiting ("peer rejected" errors)
+                if ($playlist->isProcessing()) {
+                    Log::debug("Skipping profile refresh for playlist {$playlist->id} - currently processing");
+
+                    return;
+                }
+
                 $this->refreshPlaylistProfiles($playlist);
             }
 

@@ -24,7 +24,11 @@ class PlaylistInfo extends Component
     public function mount(): void
     {
         // Dispatch background job to refresh provider info if profiles are enabled
-        if ($this->record instanceof Playlist && $this->record->profiles_enabled) {
+        // Skip if playlist is currently processing/syncing to avoid concurrent API calls
+        // that could trigger provider rate limiting ("peer rejected" errors)
+        if ($this->record instanceof Playlist
+            && $this->record->profiles_enabled
+            && !$this->record->isProcessing()) {
             RefreshPlaylistProfiles::dispatch($this->record->id);
         }
     }
