@@ -105,13 +105,18 @@ class ProcessM3uImportSeriesChunk implements ShouldQueue
             return; // skip if no base url or credentials
         }
 
-        // Get the series streams for this category with provider throttling
+        // Get the series streams for this category with provider throttling and retry logic
         $seriesStreamsUrl = "$baseUrl/player_api.php?username=$user&password=$password&action=get_series&category_id={$sourceCategoryId}";
-        $seriesStreamsResponse = $this->withProviderThrottling(fn () => Http::withUserAgent($userAgent)
-            ->withOptions(['verify' => $verify])
-            ->timeout(60) // set timeout to 1 minute
-            ->throw()->get($seriesStreamsUrl));
-        if (! $seriesStreamsResponse->ok()) {
+        $seriesStreamsResponse = $this->fetchWithRetry(
+            url: $seriesStreamsUrl,
+            userAgent: $userAgent,
+            verify: $verify,
+            context: "series category {$sourceCategoryId}"
+        );
+
+        if (! $seriesStreamsResponse || ! $seriesStreamsResponse->ok()) {
+            Log::warning("Skipping series category {$sourceCategoryId} due to fetch failure");
+
             return; // skip this category if there's an error
         }
 
@@ -198,5 +203,87 @@ class ProcessM3uImportSeriesChunk implements ShouldQueue
                 throw $e;
             }
         });
+    }
+
+    /**
+     * Fetch URL with retry logic and exponential backoff for connection errors.
+     *
+     * @param  string  $url  The URL to fetch
+     * @param  string  $userAgent  User agent to use
+     * @param  bool  $verify  Whether to verify SSL
+     * @param  string  $context  Context for logging
+     * @param  int  $maxRetries  Maximum number of retries (default 3)
+     * @return \Illuminate\Http\Client\Response|null
+     */
+    protected function fetchWithRetry(
+        string $url,
+        string $userAgent,
+        bool $verify,
+        string $context,
+        int $maxRetries = 3
+    ): ?\Illuminate\Http\Client\Response {
+        $attempt = 0;
+        $lastException = null;
+
+        while ($attempt < $maxRetries) {
+            $attempt++;
+
+            try {
+                $response = $this->withProviderThrottling(fn () => Http::withUserAgent($userAgent)
+                    ->withOptions(['verify' => $verify])
+                    ->timeout(60)
+                    ->get($url));
+
+                if ($response->ok()) {
+                    return $response;
+                }
+
+                // Non-OK response, log and retry
+                Log::warning("HTTP error fetching {$context}", [
+                    'attempt' => $attempt,
+                    'status' => $response->status(),
+                ]);
+            } catch (\Illuminate\Http\Client\ConnectionException $e) {
+                $lastException = $e;
+                $errorMessage = $e->getMessage();
+
+                // Check if this is a retryable error
+                $isRetryable = str_contains($errorMessage, 'Connection reset by peer')
+                    || str_contains($errorMessage, 'Connection refused')
+                    || str_contains($errorMessage, 'Operation timed out')
+                    || str_contains($errorMessage, 'cURL error 56')
+                    || str_contains($errorMessage, 'cURL error 28')
+                    || str_contains($errorMessage, 'cURL error 7');
+
+                if (! $isRetryable) {
+                    Log::error("Non-retryable error fetching {$context}: {$errorMessage}");
+                    throw $e;
+                }
+
+                Log::warning("Connection error fetching {$context} (attempt {$attempt}/{$maxRetries})", [
+                    'error' => $errorMessage,
+                ]);
+            } catch (\Exception $e) {
+                // Non-connection errors should not be retried
+                Log::error("Unexpected error fetching {$context}: ".$e->getMessage());
+                throw $e;
+            }
+
+            // If we haven't returned or thrown, wait with exponential backoff before retrying
+            if ($attempt < $maxRetries) {
+                $waitSeconds = pow(2, $attempt); // 2s, 4s, 8s
+                Log::info("Waiting {$waitSeconds}s before retry {$attempt}/{$maxRetries} for {$context}");
+                sleep($waitSeconds);
+            }
+        }
+
+        // All retries exhausted
+        if ($lastException) {
+            Log::error("All {$maxRetries} retries exhausted for {$context}", [
+                'last_error' => $lastException->getMessage(),
+            ]);
+        }
+
+        return null;
     }
 }

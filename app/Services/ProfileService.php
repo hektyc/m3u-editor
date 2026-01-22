@@ -385,7 +385,9 @@ class ProfileService
                 return false;
             }
 
-            $userInfo = $xtream->userInfo(timeout: 5);
+            // Use a longer timeout (15 seconds) to handle slower provider responses
+            // The 5 second timeout was causing too many false failures
+            $userInfo = $xtream->userInfo(timeout: 15);
 
             if ($userInfo) {
                 $maxConnections = (int) ($userInfo['user_info']['max_connections'] ?? 1);

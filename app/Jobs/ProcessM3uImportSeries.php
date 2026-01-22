@@ -113,7 +113,7 @@ class ProcessM3uImportSeries implements ShouldQueue
             ]);
 
             // Fire the playlist synced event
-            event(new SyncCompleted($playlist));
+            event(new SyncCompleted($this->playlist));
         }
     }
 }

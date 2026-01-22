@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Playlist;
 use Exception;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -84,23 +85,69 @@ class XtreamService
             throw new Exception('Config not initialized. Call init() first with Playlist or Xtream config array.');
         }
         $attempts = 0;
-        do {
-            $user_agent = $this->playlist?->user_agent ?? 'VLC/3.0.21 LibVLC/3.0.21';
-            $verify = ! ($this->playlist?->disable_ssl_verification ?? false);
-            $response = Http::timeout($timeout) // defaults to 15 minutes
-                ->withOptions(['verify' => $verify])
-                ->withHeaders(['User-Agent' => $user_agent])
-                ->get($url);
+        $lastException = null;
+        $response = null;
 
-            if ($response->ok()) {
-                return $response->json();
+        do {
+            try {
+                $user_agent = $this->playlist?->user_agent ?? 'VLC/3.0.21 LibVLC/3.0.21';
+                $verify = ! ($this->playlist?->disable_ssl_verification ?? false);
+                $response = Http::timeout($timeout) // defaults to 15 minutes
+                    ->withOptions(['verify' => $verify])
+                    ->withHeaders(['User-Agent' => $user_agent])
+                    ->get($url);
+
+                if ($response->ok()) {
+                    return $response->json();
+                }
+
+                // Non-OK response - increment attempts and retry
+                $attempts++;
+                Log::debug("XtreamService request failed with status {$response->status()}, attempt {$attempts}/{$this->retryLimit}");
+            } catch (\Illuminate\Http\Client\ConnectionException $e) {
+                $lastException = $e;
+                $attempts++;
+                $errorMessage = $e->getMessage();
+
+                // Log the connection error
+                Log::warning("XtreamService connection error on attempt {$attempts}/{$this->retryLimit}: {$errorMessage}");
+
+                // Check if this is a retryable error
+                $isRetryable = str_contains($errorMessage, 'Connection reset by peer')
+                    || str_contains($errorMessage, 'Connection refused')
+                    || str_contains($errorMessage, 'Operation timed out')
+                    || str_contains($errorMessage, 'cURL error 56')
+                    || str_contains($errorMessage, 'cURL error 28')
+                    || str_contains($errorMessage, 'cURL error 7');
+
+                if (! $isRetryable) {
+                    // Non-retryable connection error - throw immediately
+                    throw $e;
+                }
             }
 
-            $attempts++;
-            sleep(1);
+            // Wait with exponential backoff before retrying
+            if ($attempts < $this->retryLimit) {
+                $waitSeconds = min(pow(2, $attempts), 10); // 2s, 4s, 8s, max 10s
+                sleep($waitSeconds);
+            }
         } while ($attempts < $this->retryLimit);
 
-        $response->throw(); // if we exhausted retries, let it bubble up
+        // All retries exhausted
+        if ($lastException) {
+            Log::error("XtreamService: All {$this->retryLimit} retries exhausted due to connection errors", [
+                'url' => preg_replace('/password=[^&]+/', 'password=***', $url),
+                'last_error' => $lastException->getMessage(),
+            ]);
+            throw $lastException;
+        }
+
+        // If we got here with a response, throw based on the last response
+        if ($response) {
+            $response->throw();
+        }
+
+        throw new Exception('XtreamService: Request failed after all retries');
     }
 
     protected function makeUrl(string $action, array $extra = []): string
