@@ -28,7 +28,7 @@ class PlaylistInfo extends Component
         // that could trigger provider rate limiting ("peer rejected" errors)
         if ($this->record instanceof Playlist
             && $this->record->profiles_enabled
-            && !$this->record->isProcessing()) {
+            && ! $this->record->isProcessing()) {
             RefreshPlaylistProfiles::dispatch($this->record->id);
         }
     }
