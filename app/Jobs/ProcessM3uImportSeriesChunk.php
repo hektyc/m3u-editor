@@ -207,13 +207,6 @@ class ProcessM3uImportSeriesChunk implements ShouldQueue
 
     /**
      * Fetch URL with retry logic and exponential backoff for connection errors.
-     *
-     * @param  string  $url  The URL to fetch
-     * @param  string  $userAgent  User agent to use
-     * @param  bool  $verify  Whether to verify SSL
-     * @param  string  $context  Context for logging
-     * @param  int  $maxRetries  Maximum number of retries (default 3)
-     * @return \Illuminate\Http\Client\Response|null
      */
     protected function fetchWithRetry(
         string $url,
@@ -265,7 +258,7 @@ class ProcessM3uImportSeriesChunk implements ShouldQueue
                 ]);
             } catch (\Exception $e) {
                 // Non-connection errors should not be retried
-                Log::error("Unexpected error fetching {$context}: ".$e->getMessage());
+                Log::error('Unexpected error fetching '.$context.': '.$e->getMessage());
                 throw $e;
             }
 

@@ -202,7 +202,7 @@ class RefreshPlaylistProfiles implements ShouldQueue
      */
     protected function trackFailures(int $playlistId, int $failures, int $totalProfiles): void
     {
-        $failureKey = self::FAILURE_CACHE_PREFIX . $playlistId;
+        $failureKey = self::FAILURE_CACHE_PREFIX.$playlistId;
 
         // If all profiles failed, this is likely a rate limiting issue
         if ($failures > 0 && $failures >= $totalProfiles) {
@@ -229,7 +229,7 @@ class RefreshPlaylistProfiles implements ShouldQueue
      */
     protected function enterCooldown(int $playlistId): void
     {
-        $cooldownKey = self::COOLDOWN_CACHE_PREFIX . $playlistId;
+        $cooldownKey = self::COOLDOWN_CACHE_PREFIX.$playlistId;
         $expiresAt = now()->addSeconds(self::COOLDOWN_DURATION);
 
         Cache::put($cooldownKey, $expiresAt->timestamp, self::COOLDOWN_DURATION);
@@ -240,7 +240,7 @@ class RefreshPlaylistProfiles implements ShouldQueue
         ]);
 
         // Reset failure counter
-        Cache::forget(self::FAILURE_CACHE_PREFIX . $playlistId);
+        Cache::forget(self::FAILURE_CACHE_PREFIX.$playlistId);
     }
 
     /**
@@ -248,7 +248,7 @@ class RefreshPlaylistProfiles implements ShouldQueue
      */
     protected function isInCooldown(int $playlistId): bool
     {
-        return Cache::has(self::COOLDOWN_CACHE_PREFIX . $playlistId);
+        return Cache::has(self::COOLDOWN_CACHE_PREFIX.$playlistId);
     }
 
     /**
@@ -256,7 +256,7 @@ class RefreshPlaylistProfiles implements ShouldQueue
      */
     protected function getCooldownExpiry(int $playlistId): ?string
     {
-        $timestamp = Cache::get(self::COOLDOWN_CACHE_PREFIX . $playlistId);
+        $timestamp = Cache::get(self::COOLDOWN_CACHE_PREFIX.$playlistId);
 
         return $timestamp ? \Carbon\Carbon::createFromTimestamp($timestamp)->toDateTimeString() : null;
     }
